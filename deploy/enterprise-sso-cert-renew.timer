@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Enterprise SSO internal certificate expiry check
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

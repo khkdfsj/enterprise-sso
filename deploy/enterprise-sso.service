@@ -1,0 +1,28 @@
+[Unit]
+Description=Enterprise OIDC Single Sign-On
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=enterprise-sso
+Group=enterprise-sso
+WorkingDirectory=/opt/enterprise-sso/current
+EnvironmentFile=/etc/enterprise-sso/enterprise-sso.env
+ExecStart=/opt/node-enterprise-sso/bin/node /opt/enterprise-sso/current/src/server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

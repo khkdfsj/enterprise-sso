@@ -1,0 +1,19 @@
+[Unit]
+Description=Dedicated Enterprise SSO HTTPS proxy
+After=network-online.target enterprise-sso-tunnel.service
+Wants=network-online.target
+Requires=enterprise-sso-tunnel.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/nginx/sbin/nginx -t -c /etc/enterprise-sso/nginx.conf
+ExecStart=/usr/local/nginx/sbin/nginx -c /etc/enterprise-sso/nginx.conf -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3s
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

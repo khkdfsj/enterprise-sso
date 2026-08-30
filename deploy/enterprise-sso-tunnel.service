@@ -1,0 +1,21 @@
+[Unit]
+Description=Enterprise SSO restricted tunnel to 118
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=enterprise-sso-proxy
+Group=enterprise-sso-proxy
+UMask=0077
+ExecStart=/usr/bin/ssh -NT -i /var/lib/enterprise-sso-proxy/id_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/var/lib/enterprise-sso-proxy/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:13000:127.0.0.1:3000 enterprise-sso-tunnel@210.47.163.118
+Restart=always
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

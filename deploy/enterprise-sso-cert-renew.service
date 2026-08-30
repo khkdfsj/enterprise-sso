@@ -1,0 +1,9 @@
+[Unit]
+Description=Renew the Enterprise SSO internal IP certificate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/enterprise-sso-renew-cert.sh
+PrivateTmp=true
+ProtectHome=true
+UMask=0077
