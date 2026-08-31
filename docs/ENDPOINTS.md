@@ -43,6 +43,12 @@
 
 网页管理后台地址：`http://210.47.163.114/enterprise-sso/admin`
 
+- 应用接入：`http://210.47.163.114/enterprise-sso/admin/applications`
+- 人员与账号：`http://210.47.163.114/enterprise-sso/admin/people`
+- 届次换届：`http://210.47.163.114/enterprise-sso/admin/terms`
+- 登录与审计：`http://210.47.163.114/enterprise-sso/admin/audit`
+- 接入指南：`http://210.47.163.114/enterprise-sso/admin/integration`
+
 受控命令行仍可用于部署、应急恢复和批量操作：
 
 - 首个超级管理员：`npm run admin:bootstrap`
