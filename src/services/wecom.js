@@ -68,12 +68,29 @@ export function buildWecomAuthorizeUrl(state) {
 }
 
 export async function resolveWecomUser(code) {
+  if (config.wecom.userinfoBridgeUrl) {
+    const response = await fetch(config.wecom.userinfoBridgeUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.wecom.userinfoBridgeToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new Error(`WeCom userinfo bridge HTTP ${response.status}`);
+    return parseWecomUserResponse(await response.json());
+  }
   const token = await accessToken();
   const url = new URL('https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo');
   url.searchParams.set('access_token', token);
   url.searchParams.set('code', code);
   const data = await fetchJson(url);
-  const userId = data.userid ?? data.UserId ?? data.UserID;
+  return parseWecomUserResponse(data);
+}
+
+export function parseWecomUserResponse(data) {
+  const userId = data?.userid ?? data?.UserId ?? data?.UserID;
   if (!userId) throw new Error('WeCom response did not contain a user id');
   return String(userId);
 }

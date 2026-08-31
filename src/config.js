@@ -41,11 +41,17 @@ export const config = Object.freeze({
     agentId: process.env.WECOM_AGENT_ID ?? '',
     corpSecret: process.env.WECOM_CORP_SECRET ?? '',
     accessTokenUrl: process.env.WECOM_ACCESS_TOKEN_URL ?? '',
+    userinfoBridgeUrl: process.env.WECOM_USERINFO_BRIDGE_URL ?? '',
+    userinfoBridgeToken: process.env.WECOM_USERINFO_BRIDGE_TOKEN ?? '',
     scope: process.env.WECOM_OAUTH_SCOPE ?? 'snsapi_base',
     enabled: Boolean(
       process.env.WECOM_CORP_ID
       && process.env.WECOM_AGENT_ID
-      && (process.env.WECOM_CORP_SECRET || process.env.WECOM_ACCESS_TOKEN_URL)
+      && (
+        process.env.WECOM_CORP_SECRET
+        || process.env.WECOM_ACCESS_TOKEN_URL
+        || (process.env.WECOM_USERINFO_BRIDGE_URL && process.env.WECOM_USERINFO_BRIDGE_TOKEN)
+      )
     ),
   },
 });
@@ -55,6 +61,9 @@ if (config.production) {
   if (config.cookieKeys.length < 2 || config.cookieKeys.some((v) => v.length < 32)) throw new Error('Production COOKIE_KEYS must contain at least two 32+ character values');
   if (config.passwordPepper.length < 32) throw new Error('Production PASSWORD_PEPPER must be at least 32 characters');
   if (config.oidcStorageKey.length < 32) throw new Error('Production OIDC_STORAGE_KEY must be at least 32 characters');
+  if (config.wecom.userinfoBridgeUrl && config.wecom.userinfoBridgeToken.length < 32) {
+    throw new Error('WECOM_USERINFO_BRIDGE_TOKEN must be at least 32 characters');
+  }
 }
 
 if (config.ttl.sessionIdle > config.ttl.session) {

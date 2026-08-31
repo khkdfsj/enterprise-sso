@@ -80,6 +80,8 @@ export APP_PROVISIONING_ENABLED='0'
 
 两者同时存在时优先使用 `WECOM_ACCESS_TOKEN_URL`。令牌地址由服务器管理员维护，不要写进客户端程序或公开仓库。配置完成后执行 `npm run wecom:sync-identities`，为全部人员按 `UserID = people.id` 建立企业微信身份映射。
 
+如果认证数据库服务器不在企业微信可信 IP 列表中，可在已受信任的内网前端机部署 `deploy/wecom-userinfo-bridge.php`，并在认证中心设置 `WECOM_USERINFO_BRIDGE_URL` 与至少 32 位的 `WECOM_USERINFO_BRIDGE_TOKEN`。桥接端同时校验来源 IP和共享密钥，只接受 POST，不在 URL 或日志中携带临时 code。
+
 随后在企业微信后台登记实际回调地址：
 
 `https://210.47.163.114:8443/wecom/callback`
