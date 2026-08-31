@@ -9,6 +9,8 @@ final class EnterpriseSsoClient
     private $discovery;
     private $idleSeconds;
     private $absoluteSeconds;
+    private $caFile;
+    private $cookieSecure;
 
     public function __construct(array $config)
     {
@@ -23,6 +25,8 @@ final class EnterpriseSsoClient
         $this->redirectUri = $config['redirect_uri'];
         $this->idleSeconds = isset($config['local_idle_seconds']) ? (int) $config['local_idle_seconds'] : 7200;
         $this->absoluteSeconds = isset($config['local_absolute_seconds']) ? (int) $config['local_absolute_seconds'] : 28800;
+        $this->caFile = isset($config['ca_file']) && is_string($config['ca_file']) ? $config['ca_file'] : null;
+        $this->cookieSecure = !isset($config['local_cookie_secure']) || (bool) $config['local_cookie_secure'];
         if (stripos($this->issuer, 'https://') !== 0) {
             throw new RuntimeException('SSO issuer must use HTTPS');
         }
@@ -149,7 +153,7 @@ final class EnterpriseSsoClient
             session_set_cookie_params(array(
                 'lifetime' => 0,
                 'path' => '/',
-                'secure' => true,
+                'secure' => $this->cookieSecure,
                 'httponly' => true,
                 'samesite' => 'Lax',
             ));
@@ -197,6 +201,10 @@ final class EnterpriseSsoClient
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
         );
+        if ($this->caFile !== null) {
+            if (!is_readable($this->caFile)) throw new RuntimeException('SSO CA file is not readable');
+            $defaults[CURLOPT_CAINFO] = $this->caFile;
+        }
         curl_setopt_array($handle, $options + $defaults);
         $body = curl_exec($handle);
         $status = curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
