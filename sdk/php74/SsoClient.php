@@ -11,6 +11,8 @@ final class EnterpriseSsoClient
     private $absoluteSeconds;
     private $caFile;
     private $cookieSecure;
+    private $sessionName;
+    private $sessionPath;
 
     public function __construct(array $config)
     {
@@ -27,12 +29,16 @@ final class EnterpriseSsoClient
         $this->absoluteSeconds = isset($config['local_absolute_seconds']) ? (int) $config['local_absolute_seconds'] : 28800;
         $this->caFile = isset($config['ca_file']) && is_string($config['ca_file']) ? $config['ca_file'] : null;
         $this->cookieSecure = !isset($config['local_cookie_secure']) || (bool) $config['local_cookie_secure'];
+        $this->sessionName = isset($config['session_name']) ? (string) $config['session_name'] : 'ENTERPRISE_SSO_SID';
+        $this->sessionPath = isset($config['session_path']) ? (string) $config['session_path'] : '/';
         if (stripos($this->issuer, 'https://') !== 0) {
             throw new RuntimeException('SSO issuer must use HTTPS');
         }
         if ($this->idleSeconds <= 0 || $this->absoluteSeconds <= 0 || $this->idleSeconds > $this->absoluteSeconds) {
             throw new InvalidArgumentException('Invalid local SSO session lifetime');
         }
+        if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $this->sessionName)) throw new InvalidArgumentException('Invalid SSO session name');
+        if ($this->sessionPath === '' || $this->sessionPath[0] !== '/' || strpos($this->sessionPath, ';') !== false) throw new InvalidArgumentException('Invalid SSO session path');
     }
 
     public function requireLogin()
@@ -150,9 +156,10 @@ final class EnterpriseSsoClient
     {
         if (session_status() === PHP_SESSION_NONE) {
             if (headers_sent()) throw new RuntimeException('SSO guard must run before any output');
+            session_name($this->sessionName);
             session_set_cookie_params(array(
                 'lifetime' => 0,
-                'path' => '/',
+                'path' => $this->sessionPath,
                 'secure' => $this->cookieSecure,
                 'httponly' => true,
                 'samesite' => 'Lax',

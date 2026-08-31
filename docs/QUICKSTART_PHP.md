@@ -6,7 +6,7 @@
 
 1. 管理员在认证中心登记应用名称和精确回调地址，取得 `client_id` 与只显示一次的 `client_secret`。
    认证中心地址固定为 `https://210.47.163.114:8443`；应用服务器和使用者电脑需信任企业内部根证书。不能安装到系统信任库时，在 SDK 配置中设置只读 `ca_file`。
-2. 将 `sdk/php74` 复制到应用的不可公开浏览目录，把 `config.example.php` 复制为 `config.php` 并填写认证中心签发的配置。
+2. 将 `sdk/php74` 复制到应用的不可公开浏览目录，把 `config.example.php` 复制为 `config.php` 并填写认证中心签发的配置。为每个应用设置不同的 `session_name`，并把 `session_path` 限制到该应用目录。
 3. 将 `callback.php` 暴露在登记的回调地址；其余 SDK 文件不得作为下载文件提供。
 4. 在所有需要登录的 PHP 页面第一行加入：
 
