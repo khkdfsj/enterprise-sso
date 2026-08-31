@@ -37,7 +37,7 @@
 
 ## 仍需外部配置
 
-企业微信扫码已经在生产启用：复用旧系统的 CorpID、AgentID 和集中 access token，不复制 CorpSecret；120 名人员已按 `UserID = people.id` 建立企业微信身份映射。118 直连企业微信受可信 IP 策略限制，因此 114 保留了受来源 IP 和共享密钥双重保护的 UserID 查询桥。登录页、扫码事务、SVG 二维码和桥接调用链已自动验收；手机回调改用既有 HTTPS 地址 `https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php`，最终仍需管理员真实扫码确认企业微信侧配置。
+企业微信扫码已经在生产启用：复用旧系统的 CorpID `wxdbd5a48e19060bdf`、AgentID `1000090` 和 113 集中 access token，不复制 CorpSecret；120 名人员已按 `UserID = people.id` 建立企业微信身份映射。118 直连企业微信受可信 IP 策略限制，因此 114 保留了受来源 IP 和共享密钥双重保护的 UserID 查询桥。登录页、扫码事务、SVG 二维码和桥接调用链已自动验收。旧代码所写的 `syauinfo.syau.edu.cn` 现解析到 210.47.162.18 且原路径返回 404，因此当前手机回调使用可达的 IP 80 地址；最终仍需管理员真实扫码确认企业微信应用是否允许该回调。
 
 生产 release 和 commit 以 `/opt/enterprise-sso/current` 及 GitHub 最新提交为准。凭据策略等重大数据变更只保留一个明确回滚点；普通样式、文档和可回滚代码发布不重复复制数据库。
 

@@ -6,7 +6,7 @@
 
 - `enterprise-sso-tunnel.service`：`127.0.0.1:13000` 到 118 的受限隧道。
 - 原 Nginx 通过独立 include 只代理 `/enterprise-sso/`。
-- 企业微信手机回调 PHP 位于既有 HTTPS 站点的 `qywx/WeComVerificationSystem` 目录。
+- 企业微信手机回调 PHP 位于 IP 80 的 `qywx/WeComVerificationSystem` 目录。
 
 118：
 

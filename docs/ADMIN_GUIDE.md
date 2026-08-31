@@ -84,7 +84,7 @@ export APP_PROVISIONING_ENABLED='0'
 
 随后在企业微信后台登记实际回调地址：
 
-`https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php`
+`http://210.47.163.114/qywx/WeComVerificationSystem/enterprise-sso-callback.php`
 
 配置前应确认企业微信管理后台是否允许 IP 回调地址。修改环境变量前先备份文件，修改后只重启 `enterprise-sso.service`。参数不完整时扫码入口自动隐藏，密码登录不受影响。
 
