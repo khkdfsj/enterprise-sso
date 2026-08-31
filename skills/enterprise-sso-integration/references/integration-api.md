@@ -2,7 +2,7 @@
 
 ## Discovery and OIDC
 
-Configure the issuer supplied by the Enterprise SSO administrator. The current internal deployment normally uses `https://210.47.163.114:8443`; do not hard-code it when configuration is available.
+Configure the issuer supplied by the Enterprise SSO administrator. The current internal deployment uses `http://210.47.163.114/enterprise-sso`; do not hard-code it when configuration is available.
 
 - Discovery: `/.well-known/openid-configuration`
 - Flow: authorization code with PKCE (`S256`)

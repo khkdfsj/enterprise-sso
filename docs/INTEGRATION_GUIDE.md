@@ -11,7 +11,7 @@
 - PKCE S256
 - 客户端认证：`client_secret_post`
 - ID Token 签名：ES256
-- Discovery：`https://210.47.163.114:8443/.well-known/openid-configuration`
+- Discovery：`http://210.47.163.114/enterprise-sso/.well-known/openid-configuration`
 
 禁止使用密码模式、隐式模式或自行模拟认证中心表单。
 

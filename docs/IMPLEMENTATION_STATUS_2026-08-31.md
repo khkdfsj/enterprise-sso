@@ -27,30 +27,23 @@
 
 ## 生产发布与验收结果
 
-- GitHub 标签：`v0.2.2`；生产 commit：`902d942`；远端 CI 通过。
-- 118 当前 release：`/opt/enterprise-sso/releases/20260831-902d942`，服务 active。
-- 生产库：120 人、120 账号、120 当前任职、3 个 OIDC 应用、3 名永久超级管理员。
+- 认证入口迁到校园网可达的 `http://210.47.163.114/enterprise-sso/`，只占用精确子路径。
+- 生产库：120 人、120 账号、120 当前任职、1 个 OIDC 试点应用、3 名永久超级管理员。
 - 正式迁移批次：`departmentifo-8370b8688e367872`；提交后验证 0 个 UserID/企业微信身份不一致。
-- 114 已接入生日祝福、enrollmentPhoto、新生报到 StuReg 三个隔离测试入口。
-- 真实链路：`2023195077` 在生日祝福入口密码登录成功；随后 enrollmentPhoto 和 StuReg 复用中央 SSO，均未再次要求密码。
-- 管理后台严格校验证书登录成功，显示 120 人。
+- 114 只保留生日祝福后台接入；enrollmentPhoto、StuReg 及其他程序均已恢复原认证。
+- 管理后台使用独立 CSS，显示人员、届次、任职、应用和换届记录。
 - 换届在生产备份副本上演练：117 个非永久账号暂停，3 个永久管理员保持有效，新名单 2 人恢复，未入选 115 人卸任；生产库未修改。
-- 114 原 Nginx 仍监听 80，没有新增 443；独立 SSO Nginx 监听 8443；没有 HSTS。
+- 114 原 Nginx 仍只按原计划监听 80/既有端口；本系统不新增 443、不强制 HTTPS、没有 HSTS。
 
 ## 仍需外部配置
 
-企业微信扫码已经在生产启用：复用旧系统的 CorpID、AgentID 和集中 access token，不复制 CorpSecret；120 名人员已按 `UserID = people.id` 建立企业微信身份映射。118 直连企业微信会被可信 IP 策略以 `60020` 拒绝，因此 v0.2.4 在 114 部署了只接受 118 来源 IP、并校验随机共享密钥的 UserID 查询桥。登录页、扫码事务、SVG 二维码、错误密钥拒绝和桥接到企业微信的调用链均已验收；最后还需管理员用真实企业微信客户端扫描一次，确认企业微信后台接受 `https://210.47.163.114:8443/wecom/callback` 的 IP 回调。
+企业微信扫码已经在生产启用：复用旧系统的 CorpID、AgentID 和集中 access token，不复制 CorpSecret；120 名人员已按 `UserID = people.id` 建立企业微信身份映射。118 直连企业微信受可信 IP 策略限制，因此 114 保留了受来源 IP 和共享密钥双重保护的 UserID 查询桥。登录页、扫码事务、SVG 二维码和桥接调用链已自动验收；手机回调改用既有 HTTPS 地址 `https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php`，最终仍需管理员真实扫码确认企业微信侧配置。
 
-生产发布与回滚点：
-
-- 118 当前版本：`/opt/enterprise-sso/releases/20260831-fd19876`（v0.2.4）
-- 118 本次备份：`/opt/enterprise-sso/backups/wecom-enable-20260831-113231`
-- 114 桥接备份：`/root/enterprise-sso-backups/wecom-bridge-20260831-113135`
-- 114 未新增 443 监听、未启用 HSTS；原 80 与其他程序不变
+生产 release 和 commit 以 `/opt/enterprise-sso/current` 及 GitHub 最新提交为准。凭据策略等重大数据变更只保留一个明确回滚点；普通样式、文档和可回滚代码发布不重复复制数据库。
 
 ## 回滚边界
 
 - 迁移批次可用 `npm run personnel:import -- --rollback <batch-id>` 回滚由该批次新建的人员、账号、身份和任职。
 - 回滚发布使用 118 的数据库备份和上一 release；不得用 Git 命令替代数据库恢复。
 - 181 旧系统只读，不因新系统上线删除、停用或重定向。
-- 114 使用独立 `8443`，不修改其他站点的监听、HTTPS 策略或访问入口。
+- 114 只使用 `/enterprise-sso/` 精确 location，不修改其他站点的监听、HTTPS 策略或访问入口。

@@ -8,11 +8,11 @@ Enterprise SSO 是企业内部统一身份认证中心。所有受管应用共�
 
 ## 2. 当前入口
 
-- 认证地址：`https://210.47.163.114:8443`
-- Discovery：`https://210.47.163.114:8443/.well-known/openid-configuration`
-- 根证书：`deploy/enterprise-sso-internal-ca.crt`
+- 认证地址：`http://210.47.163.114/enterprise-sso`
+- Discovery：`http://210.47.163.114/enterprise-sso/.well-known/openid-configuration`
+- 企业微信手机回调：`https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php`
 
-纯内网环境使用 IP，不依赖公网域名。设备首次使用前需要信任内部根证书。
+普通访问在内网使用 IP，不依赖公网域名或额外证书；既有域名仅供企业微信 OAuth 手机回调使用。
 
 ## 3. 登录体验
 
@@ -68,9 +68,9 @@ require_once __DIR__ . '/sso/guard.php';
 
 ## 7. 部署隔离
 
-114 只新增独立 8443 Nginx 和 127.0.0.1:13000 隧道；118 认证服务只监听 127.0.0.1:3000。原 114 Nginx 的 80/443 主配置没有被修改。
+114 只新增 `/enterprise-sso/` 精确子路径 include 和 127.0.0.1:13000 隧道；118 认证服务只监听 127.0.0.1:3000。其他业务路径、监听端口和 HTTPS 策略不变。
 
-系统明确禁止 HSTS，因为同一 IP 仍有其他 HTTP 程序。8443 只允许校园网和 RFC1918 私网来源。
+系统明确禁止 HSTS，因为同一 IP 仍有其他 HTTP 程序。普通访问只使用校园网可达的 IP 80；既有域名 HTTPS 仅承接企业微信手机回调。
 
 ## 8. 数据库决定
 

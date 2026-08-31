@@ -5,28 +5,28 @@
 114：
 
 - `enterprise-sso-tunnel.service`：`127.0.0.1:13000` 到 118 的受限隧道。
-- `enterprise-sso-nginx.service`：独立 Nginx，只监听 8443。
-- `enterprise-sso-cert-renew.timer`：内部服务器证书到期检查。
+- 原 Nginx 通过独立 include 只代理 `/enterprise-sso/`。
+- 企业微信手机回调 PHP 位于既有 HTTPS 站点的 `qywx/WeComVerificationSystem` 目录。
 
 118：
 
 - `enterprise-sso.service`：只监听 `127.0.0.1:3000`。
 
-原 114 Nginx 的 80/443 配置不属于本系统，任何发布都不得修改或 reload 它。
+除独立 include 文件和一次配置校验后的 reload 外，不得修改原 114 Nginx 的其他 server、端口或业务 location。
 
 ## 日常检查
 
 ```bash
 # 114
-systemctl is-active enterprise-sso-tunnel.service enterprise-sso-nginx.service
-curl -k https://127.0.0.1:8443/healthz
+systemctl is-active enterprise-sso-tunnel.service
+curl http://127.0.0.1/enterprise-sso/healthz
 
 # 118
 systemctl is-active enterprise-sso.service
 curl http://127.0.0.1:3000/healthz
 ```
 
-OIDC 验收还应检查 Discovery 的所有 URL 都包含 `:8443`，并确认响应没有 `Strict-Transport-Security`。同一 IP 仍承载 HTTP 系统，因此本项目禁止发送 HSTS。
+OIDC 验收还应检查 Discovery 的所有 URL 都包含 `/enterprise-sso`，并确认响应没有 `Strict-Transport-Security`。同一 IP 仍承载 HTTP 系统，因此本项目禁止发送 HSTS。
 
 ## GitHub 为唯一源码基线
 
@@ -38,7 +38,7 @@ OIDC 验收还应检查 Discovery 的所有 URL 都包含 `:8443`，并确认响
 4. 提交并推送 GitHub；
 5. 为生产发布创建 tag；
 6. 从该 commit 构建新的只读 release 目录；
-7. 备份当前 release、环境文件和数据库；
+7. 仅在数据库结构、凭据策略或重大部署变化时创建一个可验证备份；普通样式和文档更新不重复备份；
 8. 原子切换 `/opt/enterprise-sso/current`；
 9. 只重启本系统服务并执行真实链路验收；
 10. 在变更记录中写入生产对应的 commit 和 tag。

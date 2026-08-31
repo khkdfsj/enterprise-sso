@@ -67,9 +67,7 @@
 | 系统 | 入口 |
 |---|---|
 | 生日祝福后台 | `http://210.47.163.114/qywx/BirthdayWishes/admin/` |
-| enrollmentPhoto 综合后台 | `http://210.47.163.114/enrollmentPhoto/admin/` |
-
-StuReg 新生报到管理后台保持原认证方式，不接入本系统。
+enrollmentPhoto、StuReg 及其他业务保持原认证方式，不接入本次试点。
 
 ## 服务器内部地址
 

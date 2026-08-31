@@ -58,7 +58,7 @@ function requireCsrf(req, res, next) {
   next();
 }
 function page(title, content) {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)}</title><style>body{font-family:system-ui;margin:0;background:#f4f6f8;color:#17212b}main{max-width:1180px;margin:auto;padding:24px}section{background:#fff;border-radius:14px;padding:20px;margin:16px 0;box-shadow:0 4px 18px #1c273312}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #e8edf2}input,select,button{padding:9px 11px;margin:4px;border:1px solid #cbd5df;border-radius:8px}button{background:#1769e0;color:#fff;cursor:pointer}a{color:#1769e0}small{color:#687786}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.metric{font-size:28px;font-weight:700}.warn{color:#a54800}</style></head><body><main>${content}</main></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)}</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-page"><main>${content}</main></body></html>`;
 }
 
 router.get('/login', (_req, res) => res.send(page('统一认证后台登录', `<section><h1>统一认证管理后台</h1><form method="post"><label>UserID / 账号 <input name="username" autocomplete="username" required></label><label>密码 <input type="password" name="password" autocomplete="current-password" required></label><button>登录</button></form></section>`)));

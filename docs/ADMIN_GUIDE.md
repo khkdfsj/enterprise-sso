@@ -2,7 +2,7 @@
 
 ## 当前管理方式
 
-日常人员、届次和换届管理使用：`https://210.47.163.114:8443/admin`。批量迁移、部署与应急操作继续使用 118 上的受控 CLI。生产环境文件位于：
+日常人员、届次和换届管理使用：`http://210.47.163.114/enterprise-sso/admin`。批量迁移、部署与应急操作继续使用 118 上的受控 CLI。生产环境文件位于：
 
 - 程序：`/opt/enterprise-sso/current`
 - 环境变量：`/etc/enterprise-sso/enterprise-sso.env`
@@ -39,7 +39,7 @@ export USER_ID NEW_PASSWORD
 unset NEW_PASSWORD
 ```
 
-2026-08-31 首批三名永久超级管理员的初始凭据保存在 118 的 `/root/enterprise-sso-initial-admin-credentials-20260831.txt`，权限为 root-only。首次交接后应分别改密并安全删除该文件，不要复制到 GitHub、网页目录或普通聊天记录。
+当前纯数字 UserID 的初始化密码为 UserID 后六位，数据库只保存 Argon2id 哈希；非学号维护账号不套用此规则。正式交接后应要求管理员改用独立强密码，不要把密码、客户端密钥或配置文件复制到 GitHub。
 
 ## 登记接入应用
 
@@ -84,7 +84,7 @@ export APP_PROVISIONING_ENABLED='0'
 
 随后在企业微信后台登记实际回调地址：
 
-`https://210.47.163.114:8443/wecom/callback`
+`https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php`
 
 配置前应确认企业微信管理后台是否允许 IP 回调地址。修改环境变量前先备份文件，修改后只重启 `enterprise-sso.service`。参数不完整时扫码入口自动隐藏，密码登录不受影响。
 
