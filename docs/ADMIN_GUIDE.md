@@ -39,6 +39,8 @@ export USER_ID NEW_PASSWORD
 unset NEW_PASSWORD
 ```
 
+2026-08-31 首批三名永久超级管理员的初始凭据保存在 118 的 `/root/enterprise-sso-initial-admin-credentials-20260831.txt`，权限为 root-only。首次交接后应分别改密并安全删除该文件，不要复制到 GitHub、网页目录或普通聊天记录。
+
 ## 登记接入应用
 
 ```bash

@@ -62,6 +62,16 @@
 
 只有管理员明确启用 `provisioning_enabled` 的机密客户端可以调用。应用使用 HTTP Basic 客户端认证，提交 `user_id` 和 `display_name`；用户密码只在认证中心页面设置。
 
+## 已接入的隔离测试地址
+
+| 系统 | 原后台地址 | 统一认证隔离测试地址 |
+|---|---|---|
+| 生日祝福后台 | `http://210.47.163.114/qywx/BirthdayWishes/admin/` | `http://210.47.163.114/qywx/BirthdayWishes/admin/sso-test/` |
+| enrollmentPhoto 综合后台 | `http://210.47.163.114/enrollmentPhoto/admin/` | `http://210.47.163.114/enrollmentPhoto/admin/sso-test/` |
+| 新生报到管理后台 | `http://210.47.163.114/qywx/StuReg/Management.php` | `http://210.47.163.114/qywx/StuReg/sso-test/` |
+
+三个 `sso-test` 目录是独立验证入口，没有替换原后台登录、Session 或权限逻辑。正式切换某个后台前应再次确认其业务角色映射。
+
 ## 服务器内部地址
 
 这些地址不提供给普通用户：
