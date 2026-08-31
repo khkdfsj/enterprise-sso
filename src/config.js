@@ -14,13 +14,21 @@ function integer(name, fallback) {
 }
 
 const nodeEnv = process.env.NODE_ENV ?? 'development';
+const issuer = required('ISSUER', 'http://127.0.0.1:3000').replace(/\/$/, '');
+const allowInsecureHttpIssuer = process.env.ALLOW_INSECURE_HTTP_ISSUER === '1';
+let issuerUrl;
+try { issuerUrl = new URL(issuer); } catch { throw new Error('ISSUER must be an absolute URL'); }
+const publicBasePath = issuerUrl.pathname === '/' ? '' : issuerUrl.pathname.replace(/\/$/, '');
 
 export const config = Object.freeze({
   nodeEnv,
   production: nodeEnv === 'production',
   host: process.env.HOST ?? '127.0.0.1',
   port: integer('PORT', 3000),
-  issuer: required('ISSUER', 'http://127.0.0.1:3000').replace(/\/$/, ''),
+  issuer,
+  publicBasePath,
+  allowInsecureHttpIssuer,
+  secureCookies: issuer.startsWith('https://'),
   trustProxy: process.env.TRUST_PROXY ?? 'loopback',
   internalHttpRedirectHosts: new Set(String(process.env.INTERNAL_HTTP_REDIRECT_HOSTS ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
   db: {
@@ -43,6 +51,7 @@ export const config = Object.freeze({
     accessTokenUrl: process.env.WECOM_ACCESS_TOKEN_URL ?? '',
     userinfoBridgeUrl: process.env.WECOM_USERINFO_BRIDGE_URL ?? '',
     userinfoBridgeToken: process.env.WECOM_USERINFO_BRIDGE_TOKEN ?? '',
+    callbackUrl: process.env.WECOM_CALLBACK_URL ?? '',
     scope: process.env.WECOM_OAUTH_SCOPE ?? 'snsapi_base',
     enabled: Boolean(
       process.env.WECOM_CORP_ID
@@ -57,7 +66,13 @@ export const config = Object.freeze({
 });
 
 if (config.production) {
-  if (!config.issuer.startsWith('https://')) throw new Error('Production ISSUER must use HTTPS');
+  if (!config.issuer.startsWith('https://')) {
+    let parsedIssuer;
+    try { parsedIssuer = new URL(config.issuer); } catch { throw new Error('Production ISSUER must be an absolute URL'); }
+    if (!config.allowInsecureHttpIssuer || parsedIssuer.protocol !== 'http:' || !config.internalHttpRedirectHosts.has(parsedIssuer.hostname)) {
+      throw new Error('Production HTTP ISSUER requires ALLOW_INSECURE_HTTP_ISSUER=1 and an approved internal host');
+    }
+  }
   if (config.cookieKeys.length < 2 || config.cookieKeys.some((v) => v.length < 32)) throw new Error('Production COOKIE_KEYS must contain at least two 32+ character values');
   if (config.passwordPepper.length < 32) throw new Error('Production PASSWORD_PEPPER must be at least 32 characters');
   if (config.oidcStorageKey.length < 32) throw new Error('Production OIDC_STORAGE_KEY must be at least 32 characters');

@@ -1,5 +1,6 @@
 import { interactionPolicy, Provider } from 'oidc-provider';
 import { config } from '../config.js';
+import { publicUrl } from '../public-url.js';
 import { SqliteOidcAdapter } from './sqlite-adapter.js';
 import { loadJwks } from './jwks.js';
 import { findAccountClaims } from '../repositories/accounts.js';
@@ -21,8 +22,8 @@ export async function createProvider() {
     jwks,
     cookies: {
       keys: config.cookieKeys,
-      short: { secure: config.production, sameSite: 'lax', httpOnly: true },
-      long: { secure: config.production, sameSite: 'lax', httpOnly: true },
+      short: { secure: config.secureCookies, sameSite: 'lax', httpOnly: true },
+      long: { secure: config.secureCookies, sameSite: 'lax', httpOnly: true },
     },
     claims: {
       openid: ['sub'],
@@ -51,7 +52,7 @@ export async function createProvider() {
     interactions: {
       policy,
       url(_ctx, interaction) {
-        return `/interaction/${interaction.uid}`;
+        return publicUrl(`/interaction/${interaction.uid}`);
       },
     },
     async findAccount(_ctx, personId) {

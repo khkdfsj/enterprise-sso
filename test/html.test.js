@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loginPage, messagePage, qrPage } from '../src/views/html.js';
+import { publicUrl } from '../src/public-url.js';
 
 test('hosted login escapes application, username, and CSRF values', () => {
   const html = loginPage({
@@ -25,7 +26,7 @@ test('QR page keeps browser secret in a POST body, not the status URL', () => {
     qrSvg: '<svg aria-label="qr"></svg>',
   });
   assert.match(html, /name="browser_secret" value="secret-1"/);
-  assert.match(html, /data-status-url="\/interaction\/uid-1\/wecom\/status"/);
+  assert.match(html, new RegExp(`data-status-url="${publicUrl('/interaction/uid-1/wecom/status').replaceAll('/', '\\/')}"`));
   assert.doesNotMatch(html, /wecom\/status\?[^\"]*secret-1/);
 });
 

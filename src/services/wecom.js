@@ -56,7 +56,7 @@ export function parseAccessTokenPayload(payload) {
 
 export function buildWecomAuthorizeUrl(state) {
   requireConfigured();
-  const callback = `${config.issuer}/wecom/callback`;
+  const callback = config.wecom.callbackUrl || `${config.issuer}/wecom/callback`;
   const url = new URL('https://open.weixin.qq.com/connect/oauth2/authorize');
   url.searchParams.set('appid', config.wecom.corpId);
   url.searchParams.set('redirect_uri', callback);

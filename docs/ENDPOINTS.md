@@ -4,13 +4,13 @@
 
 | 用途 | 地址 | 说明 |
 |---|---|---|
-| 认证中心基础地址 | `https://210.47.163.114:8443` | 内网、校园网或受控 VPN 使用 |
-| OIDC 配置发现 | `https://210.47.163.114:8443/.well-known/openid-configuration` | 接入应用自动读取端点 |
-| 登录授权入口 | `https://210.47.163.114:8443/auth` | 应用按 OIDC 参数跳转，不建议手工打开 |
-| 退出入口 | `https://210.47.163.114:8443/session/end` | 由接入应用调用 |
-| 健康检查 | `https://210.47.163.114:8443/healthz` | 正常返回 `{"ok":true}` |
-| 管理后台 | `https://210.47.163.114:8443/admin` | 统一认证管理员使用 |
-| 快捷注册 | `https://210.47.163.114:8443/register/{一次性令牌}` | 由业务系统生成后跳转，15 分钟单次有效 |
+| 认证中心基础地址 | `http://210.47.163.114/enterprise-sso` | 校园网内使用 |
+| OIDC 配置发现 | `http://210.47.163.114/enterprise-sso/.well-known/openid-configuration` | 接入应用自动读取端点 |
+| 登录授权入口 | `http://210.47.163.114/enterprise-sso/auth` | 应用按 OIDC 参数跳转，不建议手工打开 |
+| 退出入口 | `http://210.47.163.114/enterprise-sso/session/end` | 由接入应用调用 |
+| 健康检查 | `http://210.47.163.114/enterprise-sso/healthz` | 正常返回 `{"ok":true}` |
+| 管理后台 | `http://210.47.163.114/enterprise-sso/admin` | 统一认证管理员使用 |
+| 快捷注册 | `http://210.47.163.114/enterprise-sso/register/{一次性令牌}` | 由业务系统生成后跳转，15 分钟单次有效 |
 
 用户平时不需要先打开认证中心。应直接访问业务系统，由业务系统自动跳转到统一登录页面。
 
@@ -20,13 +20,13 @@
 
 | 用途 | 地址 |
 |---|---|
-| Authorization Endpoint | `https://210.47.163.114:8443/auth` |
-| Token Endpoint | `https://210.47.163.114:8443/token` |
-| UserInfo Endpoint | `https://210.47.163.114:8443/me` |
-| JWKS | `https://210.47.163.114:8443/jwks` |
-| Revocation Endpoint | `https://210.47.163.114:8443/token/revocation` |
-| Introspection Endpoint | `https://210.47.163.114:8443/token/introspection` |
-| Pushed Authorization Request | `https://210.47.163.114:8443/request` |
+| Authorization Endpoint | `http://210.47.163.114/enterprise-sso/auth` |
+| Token Endpoint | `http://210.47.163.114/enterprise-sso/token` |
+| UserInfo Endpoint | `http://210.47.163.114/enterprise-sso/me` |
+| JWKS | `http://210.47.163.114/enterprise-sso/jwks` |
+| Revocation Endpoint | `http://210.47.163.114/enterprise-sso/token/revocation` |
+| Introspection Endpoint | `http://210.47.163.114/enterprise-sso/token/introspection` |
+| Pushed Authorization Request | `http://210.47.163.114/enterprise-sso/request` |
 
 接入程序不要硬编码除 Discovery 和 Issuer 以外的端点；应从 Discovery 自动读取。
 
@@ -34,14 +34,14 @@
 
 | 用途 | 地址 | 说明 |
 |---|---|---|
-| 企业微信回调 | `https://210.47.163.114:8443/wecom/callback` | 需在企业微信管理后台登记并确认允许 IP 回调 |
-| 手机确认中间页 | `https://210.47.163.114:8443/wecom/mobile` | 由扫码流程自动使用 |
+| 企业微信回调 | `https://syauinfo.syau.edu.cn/qywx/WeComVerificationSystem/enterprise-sso-callback.php` | 仅企业微信手机回调使用 |
+| 手机确认中间页 | `http://210.47.163.114/enterprise-sso/wecom/mobile` | 由扫码流程自动使用 |
 
 企业微信参数未完整配置时，扫码入口自动隐藏，密码登录仍可使用。
 
 ## 管理后台
 
-网页管理后台地址：`https://210.47.163.114:8443/admin`
+网页管理后台地址：`http://210.47.163.114/enterprise-sso/admin`
 
 受控命令行仍可用于部署、应急恢复和批量操作：
 
@@ -58,19 +58,18 @@
 
 | 用途 | 地址 |
 |---|---|
-| 创建快捷注册链接 | `POST https://210.47.163.114:8443/api/v1/registrations` |
+| 创建快捷注册链接 | `POST http://210.47.163.114/enterprise-sso/api/v1/registrations` |
 
 只有管理员明确启用 `provisioning_enabled` 的机密客户端可以调用。应用使用 HTTP Basic 客户端认证，提交 `user_id` 和 `display_name`；用户密码只在认证中心页面设置。
 
-## 已接入的隔离测试地址
+## 已接入业务入口
 
-| 系统 | 原后台地址 | 统一认证隔离测试地址 |
-|---|---|---|
-| 生日祝福后台 | `http://210.47.163.114/qywx/BirthdayWishes/admin/` | `http://210.47.163.114/qywx/BirthdayWishes/admin/sso-test/` |
-| enrollmentPhoto 综合后台 | `http://210.47.163.114/enrollmentPhoto/admin/` | `http://210.47.163.114/enrollmentPhoto/admin/sso-test/` |
-| 新生报到管理后台 | `http://210.47.163.114/qywx/StuReg/Management.php` | `http://210.47.163.114/qywx/StuReg/sso-test/` |
+| 系统 | 入口 |
+|---|---|
+| 生日祝福后台 | `http://210.47.163.114/qywx/BirthdayWishes/admin/` |
+| enrollmentPhoto 综合后台 | `http://210.47.163.114/enrollmentPhoto/admin/` |
 
-三个 `sso-test` 目录是独立验证入口，没有替换原后台登录、Session 或权限逻辑。正式切换某个后台前应再次确认其业务角色映射。
+StuReg 新生报到管理后台保持原认证方式，不接入本系统。
 
 ## 服务器内部地址
 
@@ -89,4 +88,4 @@
 - 114 服务器根证书：`/etc/enterprise-sso/tls/ca.crt`
 - CA 私钥：只保存在 114 的受限目录，禁止下载或提交 GitHub。
 
-本系统不占用或重定向原 80/443，也不发送 HSTS，因此不会把同 IP 的其他 HTTP 系统强制改成 HTTPS。
+本系统仅占用 80 端口的 `/enterprise-sso/` 子路径，不重定向其他路径、不新增 443、不发送 HSTS。HTTP 不提供链路加密，仅限受控校园网使用，优先选择企业微信扫码登录。

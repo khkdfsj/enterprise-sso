@@ -10,6 +10,8 @@ return array(
     'ca_file' => '/etc/enterprise-sso/tls/ca.crt',
     // Set false only when this business application itself is intentionally HTTP-only.
     'local_cookie_secure' => true,
+    // Set true only for an explicitly approved internal HTTP issuer.
+    'allow_insecure_http' => false,
     'session_name' => 'MY_APP_SSO_SID',
     'session_path' => '/my-app/',
 );

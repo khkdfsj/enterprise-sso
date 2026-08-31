@@ -13,6 +13,7 @@ final class EnterpriseSsoClient
     private $cookieSecure;
     private $sessionName;
     private $sessionPath;
+    private $allowInsecureHttp;
 
     public function __construct(array $config)
     {
@@ -31,7 +32,8 @@ final class EnterpriseSsoClient
         $this->cookieSecure = !isset($config['local_cookie_secure']) || (bool) $config['local_cookie_secure'];
         $this->sessionName = isset($config['session_name']) ? (string) $config['session_name'] : 'ENTERPRISE_SSO_SID';
         $this->sessionPath = isset($config['session_path']) ? (string) $config['session_path'] : '/';
-        if (stripos($this->issuer, 'https://') !== 0) {
+        $this->allowInsecureHttp = !empty($config['allow_insecure_http']);
+        if (stripos($this->issuer, 'https://') !== 0 && !($this->allowInsecureHttp && stripos($this->issuer, 'http://') === 0)) {
             throw new RuntimeException('SSO issuer must use HTTPS');
         }
         if ($this->idleSeconds <= 0 || $this->absoluteSeconds <= 0 || $this->idleSeconds > $this->absoluteSeconds) {
@@ -144,7 +146,9 @@ final class EnterpriseSsoClient
             throw new RuntimeException('SSO issuer mismatch');
         }
         foreach (array('authorization_endpoint', 'token_endpoint', 'userinfo_endpoint') as $key) {
-            if (!isset($data[$key]) || stripos($data[$key], 'https://') !== 0) {
+            $https = isset($data[$key]) && stripos($data[$key], 'https://') === 0;
+            $approvedHttp = isset($data[$key]) && $this->allowInsecureHttp && stripos($data[$key], 'http://') === 0;
+            if (!$https && !$approvedHttp) {
                 throw new RuntimeException('Invalid SSO discovery document');
             }
         }
@@ -206,7 +210,7 @@ final class EnterpriseSsoClient
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_PROTOCOLS => $this->allowInsecureHttp ? (CURLPROTO_HTTP | CURLPROTO_HTTPS) : CURLPROTO_HTTPS,
         );
         if ($this->caFile !== null) {
             if (!is_readable($this->caFile)) throw new RuntimeException('SSO CA file is not readable');

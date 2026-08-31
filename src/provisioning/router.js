@@ -6,6 +6,7 @@ import { pool, withTransaction } from '../db.js';
 import { sha256 } from '../security/crypto.js';
 import { hashPassword, verifyPassword } from '../security/password.js';
 import { messagePage } from '../views/html.js';
+import { publicUrl } from '../public-url.js';
 
 const router = express.Router();
 const json = express.json({ limit: '16kb' });
@@ -62,7 +63,7 @@ router.get('/register/:token', async (req, res) => {
   );
   const record = rows[0];
   if (!record) return res.status(410).send(messagePage('注册链接已失效', '请返回业务系统重新发起注册。'));
-  res.send(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>开通统一认证</title><link rel="stylesheet" href="/assets/login.css"></head><body><main class="shell"><section class="intro"><h1>开通统一认证</h1><p>由 ${escapeHtml(record.application_name)} 发起。UserID 将作为唯一身份主键。</p></section><section class="panel"><h2>${escapeHtml(record.display_name)}</h2><p class="hint">UserID：${escapeHtml(record.user_id)}</p><form method="post"><label>设置密码<input type="password" name="password" minlength="12" maxlength="200" autocomplete="new-password" required></label><button class="btn primary">完成注册</button></form></section></main></body></html>`);
+  res.send(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>开通统一认证</title><link rel="stylesheet" href="${publicUrl('/assets/login.css')}"></head><body><main class="shell"><section class="intro"><h1>开通统一认证</h1><p>由 ${escapeHtml(record.application_name)} 发起。UserID 将作为唯一身份主键。</p></section><section class="panel"><h2>${escapeHtml(record.display_name)}</h2><p class="hint">UserID：${escapeHtml(record.user_id)}</p><form method="post"><label>设置密码<input type="password" name="password" minlength="12" maxlength="200" autocomplete="new-password" required></label><button class="btn primary">完成注册</button></form></section></main></body></html>`);
 });
 
 router.post('/register/:token', registrationLimit, form, async (req, res, next) => {

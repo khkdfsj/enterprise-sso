@@ -18,11 +18,11 @@
 
 ## 当前生产入口
 
-- 认证中心：`https://210.47.163.114:8443`
-- OIDC Discovery：`https://210.47.163.114:8443/.well-known/openid-configuration`
+- 认证中心：`http://210.47.163.114/enterprise-sso`
+- OIDC Discovery：`http://210.47.163.114/enterprise-sso/.well-known/openid-configuration`
 - 使用范围：企业内网、校园网和受控 VPN
 
-受管终端必须先安装 [`deploy/enterprise-sso-internal-ca.crt`](deploy/enterprise-sso-internal-ca.crt)。该文件只有公开证书，不包含 CA 私钥。
+该入口复用校园网可达的 80 端口，不要求终端安装内部根证书。由于 HTTP 不加密，账号密码和会话在不可信网络中存在被窃听风险；仅限受控内网使用，扫码登录优先。
 
 ## 文档导航
 
@@ -43,16 +43,15 @@
 
 ## 当前阶段
 
-`v0.2.4` 已部署。生产库已迁移 120 个 UserID、120 个当前任职和 3 名永久超级管理员；网页后台、年度换届、快捷注册与可回滚迁移已完成。生日祝福、enrollmentPhoto 和 StuReg 三个隔离入口已通过真实密码登录和跨应用免重复认证。企业微信扫码已复用原 CorpID、AgentID 与集中 access token；由于 118 不在企业微信可信 IP 列表内，UserID 查询通过 114 上受来源 IP 和共享密钥双重保护的单文件桥接完成。
+生产库已迁移 120 个 UserID、120 个当前任职和 3 名永久超级管理员；网页后台、年度换届、快捷注册与可回滚迁移已完成。生日祝福和 enrollmentPhoto 已接入；StuReg 保持原样，不属于统一认证接入范围。企业微信扫码复用原 CorpID、AgentID 与集中 access token；由于 118 不在企业微信可信 IP 列表内，UserID 查询通过 114 上受来源 IP 和共享密钥双重保护的单文件桥接完成。
 
 ## 部署边界
 
-- 114：独立 `8443` HTTPS 入口和受限 SSH 反向代理
+- 114：原有 80 端口下仅新增 `/enterprise-sso/` 精确子路径，并保留受限 SSH 反向代理
 - 118：认证后端与全新专用 SQLite 数据库（WAL、外键、OIDC 敏感载荷加密）
-- 浏览器只访问 `https://210.47.163.114:8443`
+- 浏览器只访问 `http://210.47.163.114/enterprise-sso/`
 - 新数据库不复用现有 MariaDB 5.5，不向公网暴露
-- 不修改 114 原 Nginx 主配置，不占用或跳转原有 80/443，不发送 HSTS
-- 使用企业内部 CA；受管电脑需预先信任 `/etc/enterprise-sso/tls/ca.crt`
+- 不新增 443、不强制 HTTPS、不发送 HSTS；除 `/enterprise-sso/` 外的现有路径不变
 
 ## 本地启动（开发）
 
@@ -62,4 +61,4 @@
 4. 写入开发种子：`npm run seed:dev`。
 5. 启动：`npm run dev`。
 
-生产环境必须使用 HTTPS、独立密钥、受支持的 Node.js LTS 以及持久化 OIDC Adapter。数据库文件不得放在 Web 根目录。任何更新必须先提交并推送 GitHub，再从明确的 commit 或 tag 发布；禁止只修改生产服务器。
+通用生产环境应优先使用 HTTPS。本企业因校园网只放行 80，使用显式白名单开启受限 HTTP 例外；数据库文件不得放在 Web 根目录。任何更新必须先提交并推送 GitHub，再从明确的 commit 或 tag 发布；禁止只修改生产服务器。

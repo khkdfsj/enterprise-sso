@@ -25,6 +25,7 @@ import { activateScheduledTerms } from './services/terms.js';
 import { loginPage, messagePage, qrPage } from './views/html.js';
 import { adminRouter } from './admin/router.js';
 import { provisioningRouter } from './provisioning/router.js';
+import { publicUrl } from './public-url.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const provider = await createProvider();
@@ -137,7 +138,7 @@ app.get('/healthz', async (_req, res) => {
   }
 });
 
-app.get('/', (_req, res) => res.redirect('/.well-known/openid-configuration'));
+app.get('/', (_req, res) => res.redirect(publicUrl('/.well-known/openid-configuration')));
 app.use('/admin', noStore, adminRouter);
 app.use(noStore, provisioningRouter);
 
