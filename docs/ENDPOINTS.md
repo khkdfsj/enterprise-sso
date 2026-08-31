@@ -81,6 +81,7 @@
 | 114 回环代理 | `http://127.0.0.1:13000` | 受限 SSH 隧道入口 |
 | 118 认证后端 | `http://127.0.0.1:3000` | Node.js 服务，仅回环监听 |
 | 118 SQLite | `/var/lib/enterprise-sso/enterprise-sso.sqlite3` | 生产数据库，不在 Web 目录 |
+| 114 企业微信 UserID 桥 | `/qywx/WeComVerificationSystem/sso-userinfo-bridge.php` | 只接受 118 POST，并同时校验共享密钥；不提供给用户或业务系统 |
 
 ## 证书文件
 

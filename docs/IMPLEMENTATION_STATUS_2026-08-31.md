@@ -39,7 +39,14 @@
 
 ## 仍需外部配置
 
-企业微信扫码代码、回调与身份规则已经完成。系统支持专用 `WECOM_CORP_SECRET`，也支持复用企业内部已有的 `WECOM_ACCESS_TOKEN_URL`；后者可避免复制和扩散旧系统的 CorpSecret。生产环境启用后仍需用真实企业微信客户端完成一次扫码回调验收，并确认企业微信允许当前 IP 与 8443 端口作为回调地址。
+企业微信扫码已经在生产启用：复用旧系统的 CorpID、AgentID 和集中 access token，不复制 CorpSecret；120 名人员已按 `UserID = people.id` 建立企业微信身份映射。118 直连企业微信会被可信 IP 策略以 `60020` 拒绝，因此 v0.2.4 在 114 部署了只接受 118 来源 IP、并校验随机共享密钥的 UserID 查询桥。登录页、扫码事务、SVG 二维码、错误密钥拒绝和桥接到企业微信的调用链均已验收；最后还需管理员用真实企业微信客户端扫描一次，确认企业微信后台接受 `https://210.47.163.114:8443/wecom/callback` 的 IP 回调。
+
+生产发布与回滚点：
+
+- 118 当前版本：`/opt/enterprise-sso/releases/20260831-fd19876`（v0.2.4）
+- 118 本次备份：`/opt/enterprise-sso/backups/wecom-enable-20260831-113231`
+- 114 桥接备份：`/root/enterprise-sso-backups/wecom-bridge-20260831-113135`
+- 114 未新增 443 监听、未启用 HSTS；原 80 与其他程序不变
 
 ## 回滚边界
 
