@@ -2,7 +2,7 @@
 
 ## 当前管理方式
 
-当前版本的认证核心使用 CLI 管理，网页管理后台尚未完成。所有命令只在 118 上执行，生产环境文件位于：
+日常人员、届次和换届管理使用：`https://210.47.163.114:8443/admin`。批量迁移、部署与应急操作继续使用 118 上的受控 CLI。生产环境文件位于：
 
 - 程序：`/opt/enterprise-sso/current`
 - 环境变量：`/etc/enterprise-sso/enterprise-sso.env`
@@ -19,16 +19,25 @@ cd /opt/enterprise-sso/current
 set -a
 source /etc/enterprise-sso/enterprise-sso.env
 set +a
-read -r ADMIN_USERNAME
+read -r ADMIN_USERID
 read -r ADMIN_DISPLAY_NAME
-read -r ADMIN_EMPLOYEE_NO
 read -r -s ADMIN_PASSWORD
-export ADMIN_USERNAME ADMIN_DISPLAY_NAME ADMIN_EMPLOYEE_NO ADMIN_PASSWORD
+export ADMIN_USERID ADMIN_DISPLAY_NAME ADMIN_PASSWORD
 /opt/node-enterprise-sso/bin/npm run admin:bootstrap
 unset ADMIN_PASSWORD
 ```
 
-初始化程序在已有有效超级管理员时会拒绝再次创建。当前版本没有首次登录强制改密页面，因此应直接设置正式强密码。
+初始化程序在已有有效超级管理员时会拒绝再次创建。`ADMIN_USERID` 同时作为人员主键、学号/工号和默认登录名；企业微信绑定时也必须使用同一个 UserID。
+
+已迁移人员设置初始密码：
+
+```bash
+read -r USER_ID
+read -r -s NEW_PASSWORD
+export USER_ID NEW_PASSWORD
+/opt/node-enterprise-sso/bin/npm run account:set-password
+unset NEW_PASSWORD
+```
 
 ## 登记接入应用
 
@@ -40,10 +49,25 @@ set +a
 export APP_NAME='业务系统名称'
 export APP_REDIRECT_URI='https://业务系统地址/sso/callback.php'
 export APP_ACCESS_MODE='rules'
+export APP_PROVISIONING_ENABLED='0'
 /opt/node-enterprise-sso/bin/npm run app:create
 ```
 
 如确实允许所有有效人员进入，可将 `APP_ACCESS_MODE` 设为 `all_active`。输出的 `client_secret` 只显示一次，应立即写入目标应用的秘密配置。
+
+只有确实需要由业务系统发起新用户开通时，才将 `APP_PROVISIONING_ENABLED` 设为 `1`。业务系统仍不能接触用户密码，只能取得 15 分钟单次注册链接。
+
+如现有业务系统仍使用内网 HTTP IP 回调，将其主机名/IP逐个加入 `INTERNAL_HTTP_REDIRECT_HOSTS`。这只允许登记精确回调地址，不会更改 114 的 80/443、不会跳转其他网站，也不会发送 HSTS。
+
+## 换届
+
+1. 在后台建立下一届草稿，录入并复核任职名单。
+2. 点击“开始换届并暂停非永久账号”，系统原子暂停所有非永久账号；永久账号不受影响。
+3. 将任职调整为待发布并复核数量、部门与职位。
+4. 发布届次。新名单账号恢复，未进入新名单的非永久人员转为已卸任；授权版本递增，使应用刷新权限。
+5. 发现名单错误时先停止继续操作，按审计记录修订；不要直接删除人员历史。
+
+永久账号当前规则示例：`2023195077`、`2007510002`、`88487016`。修改永久标记和超级管理员角色是两项独立操作，均应审计。
 
 ## 企业微信扫码
 

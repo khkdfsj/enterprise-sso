@@ -6,7 +6,8 @@ import { hashPassword } from '../security/password.js';
 
 if (config.production) throw new Error('Development seed cannot run in production');
 
-const username = process.env.DEV_ADMIN_USERNAME ?? 'admin';
+const userId = process.env.DEV_ADMIN_USERID ?? 'dev-admin';
+const username = process.env.DEV_ADMIN_USERNAME ?? userId;
 const password = process.env.DEV_ADMIN_PASSWORD;
 const clientId = process.env.DEV_CLIENT_ID ?? 'demo-app';
 const clientSecret = process.env.DEV_CLIENT_SECRET;
@@ -15,7 +16,7 @@ const redirectUri = process.env.DEV_REDIRECT_URI ?? 'http://127.0.0.1:8080/callb
 if (!password || password === 'replace-before-use') throw new Error('Set DEV_ADMIN_PASSWORD before seeding');
 if (!clientSecret || clientSecret === 'replace-before-use') throw new Error('Set DEV_CLIENT_SECRET before seeding');
 
-const personId = randomUUID();
+const personId = userId;
 const accountId = randomUUID();
 const applicationId = randomUUID();
 const passwordHash = await hashPassword(password);

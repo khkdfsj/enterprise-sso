@@ -23,6 +23,8 @@ import {
 import { buildWecomAuthorizeUrl, resolveWecomUser } from './services/wecom.js';
 import { activateScheduledTerms } from './services/terms.js';
 import { loginPage, messagePage, qrPage } from './views/html.js';
+import { adminRouter } from './admin/router.js';
+import { provisioningRouter } from './provisioning/router.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const provider = await createProvider();
@@ -136,6 +138,8 @@ app.get('/healthz', async (_req, res) => {
 });
 
 app.get('/', (_req, res) => res.redirect('/.well-known/openid-configuration'));
+app.use('/admin', noStore, adminRouter);
+app.use(noStore, provisioningRouter);
 
 app.get('/interaction/:uid', noStore, async (req, res, next) => {
   try {

@@ -9,8 +9,12 @@ export async function canAccessApplication(personId, clientId) {
   const app = await findApplication(clientId);
   if (!app || app.status !== 'active') return false;
 
-  const [people] = await pool.execute('SELECT status FROM people WHERE id=? LIMIT 1', [personId]);
-  if (!people[0] || !['active', 'probation'].includes(people[0].status)) return false;
+  const [people] = await pool.execute(
+    `SELECT p.status person_status,a.status account_status FROM people p
+     JOIN accounts a ON a.person_id=p.id WHERE p.id=? LIMIT 1`,
+    [personId],
+  );
+  if (!people[0] || people[0].account_status !== 'active' || !['active', 'probation'].includes(people[0].person_status)) return false;
   if (app.access_mode === 'all_active') return true;
 
   const [rules] = await pool.execute(

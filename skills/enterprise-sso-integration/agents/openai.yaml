@@ -1,0 +1,4 @@
+interface:
+  display_name: "Enterprise SSO Integration"
+  short_description: "Integrate internal applications with Enterprise SSO"
+  default_prompt: "Integrate this application with Enterprise SSO using OIDC and the hosted login page."

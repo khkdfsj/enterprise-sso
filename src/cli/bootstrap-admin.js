@@ -3,15 +3,16 @@ import { config } from '../config.js';
 import { pool, withTransaction } from '../db.js';
 import { hashPassword } from '../security/password.js';
 
-const username = String(process.env.ADMIN_USERNAME ?? '').trim().toLowerCase();
+const userId = String(process.env.ADMIN_USERID ?? '').trim();
+const username = String(process.env.ADMIN_USERNAME ?? userId).trim().toLowerCase();
 const password = process.env.ADMIN_PASSWORD;
 const displayName = String(process.env.ADMIN_DISPLAY_NAME ?? '').trim();
-const employeeNo = String(process.env.ADMIN_EMPLOYEE_NO ?? username).trim();
-const wecomUserId = String(process.env.ADMIN_WECOM_USERID ?? '').trim();
-if (!username || !password || !displayName) throw new Error('ADMIN_USERNAME, ADMIN_PASSWORD and ADMIN_DISPLAY_NAME are required');
+const wecomUserId = String(process.env.ADMIN_WECOM_USERID ?? userId).trim();
+if (!userId || !username || !password || !displayName) throw new Error('ADMIN_USERID, ADMIN_PASSWORD and ADMIN_DISPLAY_NAME are required');
+if (wecomUserId !== userId) throw new Error('ADMIN_WECOM_USERID must equal canonical ADMIN_USERID');
 
 const passwordHash = await hashPassword(password);
-const personId = randomUUID();
+const personId = userId;
 const accountId = randomUUID();
 const now = new Date();
 
@@ -22,7 +23,7 @@ await withTransaction(async (connection) => {
   if (existing[0]) throw new Error('An active super administrator already exists');
   await connection.execute(
     "INSERT INTO people(id,employee_no,display_name,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)",
-    [personId, employeeNo || null, displayName, now, now],
+    [personId, userId, displayName, now, now],
   );
   await connection.execute(
     "INSERT INTO accounts(id,person_id,username,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)",
@@ -45,5 +46,5 @@ await withTransaction(async (connection) => {
   );
 });
 
-console.log(JSON.stringify({ person_id: personId, account_id: accountId, username, role: 'super_admin' }, null, 2));
+console.log(JSON.stringify({ user_id: personId, account_id: accountId, username, role: 'super_admin' }, null, 2));
 await pool.end();

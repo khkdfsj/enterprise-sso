@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { database, pool } from '../src/db.js';
 import { publishTerm } from '../src/services/terms.js';
+import { startTurnover } from '../src/services/turnover.js';
+import { canAccessApplication } from '../src/repositories/applications.js';
 
 if (!process.env.DB_FILE || !/e2e/i.test(process.env.DB_FILE)) {
   throw new Error('Turnover E2E test requires a DB_FILE containing e2e');
@@ -52,7 +54,10 @@ try {
   throw error;
 }
 
+const turnover = await startTurnover(newTerm, admin.id);
+assert.equal(await canAccessApplication(admin.id, process.env.E2E_CLIENT_ID ?? 'demo-app'), false);
 const result = await publishTerm(newTerm, admin.id);
+assert.equal(await canAccessApplication(admin.id, process.env.E2E_CLIENT_ID ?? 'demo-app'), true);
 const oldState = database.prepare('SELECT status,ends_at FROM appointments WHERE id=?').get(oldAppointment);
 const newState = database.prepare('SELECT status FROM appointments WHERE id=?').get(newAppointment);
 const terms = database.prepare('SELECT id,status FROM organization_terms WHERE id IN (?,?)').all(oldTerm, newTerm);
@@ -72,5 +77,7 @@ console.log(JSON.stringify({
   previous_appointment: 'ended',
   new_appointment: 'active',
   authorization_version_incremented: true,
+  suspended_during_turnover: turnover.suspendedAccounts > 0,
+  restored_from_new_roster: true,
 }, null, 2));
 await pool.end();

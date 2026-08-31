@@ -22,6 +22,7 @@ export const config = Object.freeze({
   port: integer('PORT', 3000),
   issuer: required('ISSUER', 'http://127.0.0.1:3000').replace(/\/$/, ''),
   trustProxy: process.env.TRUST_PROXY ?? 'loopback',
+  internalHttpRedirectHosts: new Set(String(process.env.INTERNAL_HTTP_REDIRECT_HOSTS ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
   db: {
     file: path.resolve(required('DB_FILE', './runtime/enterprise-sso.sqlite3')),
   },

@@ -1,4 +1,5 @@
 import { withTransaction } from '../db.js';
+import { finishTurnover } from './turnover.js';
 
 const nowSql = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
@@ -38,6 +39,7 @@ async function activateTerm(connection, term) {
     `UPDATE term_publications SET activated_at=${nowSql} WHERE term_id=?`,
     [term.id],
   );
+  await finishTurnover(connection, term.id);
 }
 
 export async function publishTerm(termId, approverPersonId) {

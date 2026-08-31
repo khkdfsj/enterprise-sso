@@ -9,11 +9,16 @@ const redirectUri = String(process.env.APP_REDIRECT_URI ?? '').trim();
 const clientId = String(process.env.APP_CLIENT_ID ?? `app_${randomToken(18)}`).trim();
 const clientSecret = randomToken(48);
 const accessMode = process.env.APP_ACCESS_MODE === 'all_active' ? 'all_active' : 'rules';
+const provisioningEnabled = process.env.APP_PROVISIONING_ENABLED === '1';
 
 if (!name || name.length > 180) throw new Error('APP_NAME is required and must not exceed 180 characters');
-if (!/^https:\/\//i.test(redirectUri)) {
+let parsedRedirect;
+try { parsedRedirect = new URL(redirectUri); } catch { throw new Error('APP_REDIRECT_URI must be an absolute URL'); }
+if (parsedRedirect.username || parsedRedirect.password || parsedRedirect.hash) throw new Error('APP_REDIRECT_URI cannot contain credentials or a fragment');
+if (parsedRedirect.protocol !== 'https:') {
   const developmentLoopback = !config.production && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(redirectUri);
-  if (!developmentLoopback) throw new Error('APP_REDIRECT_URI must use HTTPS (development loopback HTTP is allowed)');
+  const approvedInternalHttp = parsedRedirect.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsedRedirect.hostname);
+  if (!developmentLoopback && !approvedInternalHttp) throw new Error('APP_REDIRECT_URI must use HTTPS or an explicitly approved internal HTTP host');
 }
 if (!/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('APP_CLIENT_ID contains unsupported characters');
 
@@ -33,9 +38,9 @@ const now = new Date();
 
 await withTransaction(async (connection) => {
   await connection.execute(
-    `INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,status,created_at,updated_at)
-     VALUES (?,?,?,?,?,'active',?,?)`,
-    [applicationId, clientId, name, secretHash, accessMode, now, now],
+    `INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,'active',?,?)`,
+    [applicationId, clientId, name, secretHash, accessMode, provisioningEnabled ? 1 : 0, now, now],
   );
   await connection.execute(
     'INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,?)',
@@ -55,6 +60,7 @@ console.log(JSON.stringify({
   client_secret: clientSecret,
   redirect_uri: redirectUri,
   access_mode: accessMode,
+  provisioning_enabled: provisioningEnabled,
   warning: 'client_secret is shown only now; store it in the application secret configuration',
 }, null, 2));
 await pool.end();

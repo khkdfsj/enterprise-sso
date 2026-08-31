@@ -11,6 +11,9 @@
 - 有限时单点登录
 - 应用准入权限
 - 最小人员、届次和任职模型
+- UserID（企业微信 UserID / 学号）作为人员唯一主键
+- 网页人员后台、换届暂停/发布、永久账号
+- 业务系统发起的一次性快捷注册
 - PHP 7.4 快速接入 SDK：业务页面只需引入一个守卫文件
 
 ## 当前生产入口
@@ -35,10 +38,12 @@
 - [数据库选型与 118 MariaDB 评估](docs/DATABASE_DECISION.md)
 - [系统架构](docs/ARCHITECTURE.md)
 - [版本记录](CHANGELOG.md)
+- [2026-08-31 实施与迁移验收](docs/IMPLEMENTATION_STATUS_2026-08-31.md)
+- [供开发 Agent 使用的接入 Skill](skills/enterprise-sso-integration/SKILL.md)
 
 ## 当前阶段
 
-认证核心已经部署并通过自动化测试，但生产数据库尚未建立首个超级管理员和接入应用。网页管理后台、首次登录强制改密和人员批量导入仍是后续任务；目前管理操作使用受控 CLI。企业微信扫码入口只有在完整配置 `CorpID`、`AgentID` 和 `Secret` 后才显示。
+认证核心已部署；UserID 人员模型、网页后台、年度换届、快捷注册和 DepartmentIFO 可回滚迁移已经完成代码与本地真实数据预演。生产发布、旧数据正式写入以及 114 两套业务后台的真实回调验收必须按验收文档记录的顺序执行。企业微信扫码入口只有在完整配置 `CorpID`、`AgentID` 和 `Secret` 后才显示。
 
 ## 部署边界
 

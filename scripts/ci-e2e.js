@@ -45,7 +45,7 @@ try {
   server = spawn(process.execPath, ['src/server.js'], { cwd: root, env, stdio: 'inherit' });
 
   let healthy = false;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 150; attempt += 1) {
     if (server.exitCode !== null) throw new Error(`Test server exited with ${server.exitCode}`);
     try {
       const response = await fetch('http://127.0.0.1:3000/healthz');
@@ -61,6 +61,8 @@ try {
   if (!healthy) throw new Error('Test server did not become healthy');
 
   run('scripts/e2e-login.js');
+  run('scripts/e2e-admin.js');
+  run('scripts/e2e-provisioning.js');
   run('scripts/e2e-turnover.js');
 } finally {
   if (server && server.exitCode === null) {

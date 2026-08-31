@@ -9,6 +9,8 @@
 | 登录授权入口 | `https://210.47.163.114:8443/auth` | 应用按 OIDC 参数跳转，不建议手工打开 |
 | 退出入口 | `https://210.47.163.114:8443/session/end` | 由接入应用调用 |
 | 健康检查 | `https://210.47.163.114:8443/healthz` | 正常返回 `{"ok":true}` |
+| 管理后台 | `https://210.47.163.114:8443/admin` | 统一认证管理员使用 |
+| 快捷注册 | `https://210.47.163.114:8443/register/{一次性令牌}` | 由业务系统生成后跳转，15 分钟单次有效 |
 
 用户平时不需要先打开认证中心。应直接访问业务系统，由业务系统自动跳转到统一登录页面。
 
@@ -39,13 +41,26 @@
 
 ## 管理后台
 
-当前版本**没有网页管理后台地址**。管理员功能目前通过 118 上的受控命令行完成：
+网页管理后台地址：`https://210.47.163.114:8443/admin`
+
+受控命令行仍可用于部署、应急恢复和批量操作：
 
 - 首个超级管理员：`npm run admin:bootstrap`
 - 登记应用：`npm run app:create`
 - 发布届次：`npm run term:publish`
+- 开始换届暂停：`npm run turnover:start`
+- 设置或重置密码：`npm run account:set-password`
+- DepartmentIFO 预演/迁移/回滚：`npm run personnel:import`
 
-程序目录为 `/opt/enterprise-sso/current`，Node/npm 位于 `/opt/node-enterprise-sso/bin/`。具体命令参见 [ADMIN_GUIDE.md](ADMIN_GUIDE.md)。网页管理后台是后续开发项目，完成后再在本表增加真实地址。
+程序目录为 `/opt/enterprise-sso/current`，Node/npm 位于 `/opt/node-enterprise-sso/bin/`。具体命令参见 [ADMIN_GUIDE.md](ADMIN_GUIDE.md)。
+
+## 快捷注册 API
+
+| 用途 | 地址 |
+|---|---|
+| 创建快捷注册链接 | `POST https://210.47.163.114:8443/api/v1/registrations` |
+
+只有管理员明确启用 `provisioning_enabled` 的机密客户端可以调用。应用使用 HTTP Basic 客户端认证，提交 `user_id` 和 `display_name`；用户密码只在认证中心页面设置。
 
 ## 服务器内部地址
 
