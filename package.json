@@ -19,6 +19,7 @@
     "turnover:start": "node src/cli/start-turnover.js",
     "personnel:import": "node src/cli/import-department.js",
     "personnel:verify": "node scripts/verify-migration.js",
+    "wecom:sync-identities": "node src/cli/sync-wecom-identities.js",
     "test:e2e": "node scripts/e2e-login.js",
     "test:turnover": "node scripts/e2e-turnover.js",
     "test:ci-e2e": "node scripts/ci-e2e.js",

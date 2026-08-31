@@ -3,7 +3,7 @@ import { config } from '../config.js';
 let cachedToken;
 
 function requireConfigured() {
-  if (!config.wecom.corpId || !config.wecom.agentId || !config.wecom.corpSecret) {
+  if (!config.wecom.corpId || !config.wecom.agentId || (!config.wecom.corpSecret && !config.wecom.accessTokenUrl)) {
     throw new Error('WeCom authentication is not configured');
   }
 }
@@ -18,6 +18,11 @@ async function fetchJson(url) {
 
 async function accessToken() {
   requireConfigured();
+  if (config.wecom.accessTokenUrl) {
+    const response = await fetch(config.wecom.accessTokenUrl, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`WeCom token source HTTP ${response.status}`);
+    return parseAccessTokenPayload(await response.text());
+  }
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
   const url = new URL('https://qyapi.weixin.qq.com/cgi-bin/gettoken');
   url.searchParams.set('corpid', config.wecom.corpId);
@@ -28,6 +33,25 @@ async function accessToken() {
     expiresAt: Date.now() + Math.max(300, Number(data.expires_in ?? 7200)) * 1000,
   };
   return cachedToken.value;
+}
+
+export function parseAccessTokenPayload(payload) {
+  const source = String(payload ?? '').trim();
+  let token = source;
+  if (source.startsWith('{')) {
+    let data;
+    try {
+      data = JSON.parse(source);
+    } catch {
+      throw new Error('WeCom token source returned invalid JSON');
+    }
+    if (data.errcode && data.errcode !== 0) throw new Error(`WeCom token source error ${data.errcode}`);
+    token = data.access_token ?? data.token ?? '';
+  }
+  if (!/^[A-Za-z0-9_-]{20,2048}$/.test(String(token))) {
+    throw new Error('WeCom token source returned an invalid token');
+  }
+  return String(token);
 }
 
 export function buildWecomAuthorizeUrl(state) {
@@ -53,4 +77,3 @@ export async function resolveWecomUser(code) {
   if (!userId) throw new Error('WeCom response did not contain a user id');
   return String(userId);
 }
-

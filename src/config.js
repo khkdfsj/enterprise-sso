@@ -40,8 +40,13 @@ export const config = Object.freeze({
     corpId: process.env.WECOM_CORP_ID ?? '',
     agentId: process.env.WECOM_AGENT_ID ?? '',
     corpSecret: process.env.WECOM_CORP_SECRET ?? '',
+    accessTokenUrl: process.env.WECOM_ACCESS_TOKEN_URL ?? '',
     scope: process.env.WECOM_OAUTH_SCOPE ?? 'snsapi_base',
-    enabled: Boolean(process.env.WECOM_CORP_ID && process.env.WECOM_AGENT_ID && process.env.WECOM_CORP_SECRET),
+    enabled: Boolean(
+      process.env.WECOM_CORP_ID
+      && process.env.WECOM_AGENT_ID
+      && (process.env.WECOM_CORP_SECRET || process.env.WECOM_ACCESS_TOKEN_URL)
+    ),
   },
 });
 

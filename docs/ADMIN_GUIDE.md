@@ -73,7 +73,14 @@ export APP_PROVISIONING_ENABLED='0'
 
 ## 企业微信扫码
 
-在 `/etc/enterprise-sso/enterprise-sso.env` 中配置 `WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_CORP_SECRET`，并在企业微信后台登记实际回调地址：
+在 `/etc/enterprise-sso/enterprise-sso.env` 中配置 `WECOM_CORP_ID`、`WECOM_AGENT_ID`，令牌来源二选一：
+
+- 独立应用模式：配置 `WECOM_CORP_SECRET`，认证中心自行获取并缓存 access token。
+- 兼容集中令牌模式：配置 `WECOM_ACCESS_TOKEN_URL`，读取企业内部现有的纯文本或 JSON access token；此时不需要把 CorpSecret 复制到认证中心。
+
+两者同时存在时优先使用 `WECOM_ACCESS_TOKEN_URL`。令牌地址由服务器管理员维护，不要写进客户端程序或公开仓库。配置完成后执行 `npm run wecom:sync-identities`，为全部人员按 `UserID = people.id` 建立企业微信身份映射。
+
+随后在企业微信后台登记实际回调地址：
 
 `https://210.47.163.114:8443/wecom/callback`
 
