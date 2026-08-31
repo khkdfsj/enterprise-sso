@@ -34,7 +34,7 @@
 
 | 用途 | 地址 | 说明 |
 |---|---|---|
-| 企业微信回调 | `http://210.47.163.114/qywx/WeComVerificationSystem/enterprise-sso-callback.php` | 仅企业微信手机回调使用 |
+| 企业微信回调 | `https://syauinfo.syau.edu.cn/qywx/enterprise-sso/callback.php` | 新系统独立回调，仅微信和企业微信使用 |
 | 手机确认中间页 | `http://210.47.163.114/enterprise-sso/wecom/mobile` | 由扫码流程自动使用 |
 
 企业微信参数未完整配置时，扫码入口自动隐藏，密码登录仍可使用。

@@ -37,4 +37,4 @@ if (!is_string($body) || $status < 200 || $status >= 600) {
 }
 http_response_code($status);
 header('Content-Type: ' . ($contentType !== '' ? $contentType : 'text/html; charset=utf-8'));
-echo str_replace('href="/enterprise-sso/assets/login.css"', 'href="enterprise-sso-callback.php?asset=login.css"', $body);
+echo str_replace('href="/enterprise-sso/assets/login.css"', 'href="?asset=login.css"', $body);

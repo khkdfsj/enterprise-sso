@@ -10,9 +10,9 @@ Enterprise SSO 是企业内部统一身份认证中心。所有受管应用共�
 
 - 认证地址：`http://210.47.163.114/enterprise-sso`
 - Discovery：`http://210.47.163.114/enterprise-sso/.well-known/openid-configuration`
-- 企业微信手机回调：`http://210.47.163.114/qywx/WeComVerificationSystem/enterprise-sso-callback.php`
+- 企业微信手机回调：`https://syauinfo.syau.edu.cn/qywx/enterprise-sso/callback.php`
 
-普通访问和企业微信手机回调都使用校园网可达的 IP 80，不依赖公网域名或额外证书。
+普通网页在内网使用 IP 80；微信和企业微信扫码只复用原系统已配置的可信域名，新系统使用独立目录和回调文件，不依赖旧扫码系统代码。该域名只面向微信环境，不能用普通浏览器的访问结果判断扫码链路是否可用。
 
 ## 3. 登录体验
 
