@@ -30,11 +30,12 @@ import { publicUrl } from './public-url.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const provider = await createProvider();
 const app = express();
+const router = express.Router();
 
 app.disable('x-powered-by');
 app.set('trust proxy', config.trustProxy);
 app.use(helmet({ contentSecurityPolicy: false, strictTransportSecurity: false }));
-app.use('/assets', express.static(path.resolve(here, '../public'), {
+router.use('/assets', express.static(path.resolve(here, '../public'), {
   immutable: true,
   maxAge: '1h',
   fallthrough: false,
@@ -129,7 +130,7 @@ async function finishAccessCheck(req, res, details) {
   }, { mergeWithLastSubmission: true });
 }
 
-app.get('/healthz', async (_req, res) => {
+router.get('/healthz', async (_req, res) => {
   try {
     await checkDatabase();
     res.json({ ok: true });
@@ -138,11 +139,11 @@ app.get('/healthz', async (_req, res) => {
   }
 });
 
-app.get('/', (_req, res) => res.redirect(publicUrl('/.well-known/openid-configuration')));
-app.use('/admin', noStore, adminRouter);
-app.use(noStore, provisioningRouter);
+router.get('/', (_req, res) => res.redirect(publicUrl('/.well-known/openid-configuration')));
+router.use('/admin', noStore, adminRouter);
+router.use(noStore, provisioningRouter);
 
-app.get('/interaction/:uid', noStore, async (req, res, next) => {
+router.get('/interaction/:uid', noStore, async (req, res, next) => {
   try {
     const { details, appName } = await interactionContext(req, res);
     if (details.prompt.name === 'access') return await finishAccessCheck(req, res, details);
@@ -160,7 +161,7 @@ app.get('/interaction/:uid', noStore, async (req, res, next) => {
   }
 });
 
-app.post('/interaction/:uid/password', noStore, loginLimiter, formBody, async (req, res, next) => {
+router.post('/interaction/:uid/password', noStore, loginLimiter, formBody, async (req, res, next) => {
   try {
     const { details, appName } = await interactionContext(req, res);
     if (details.prompt.name !== 'login' || !(await consumeCsrf(details.uid, req.body.csrf))) {
@@ -202,7 +203,7 @@ app.post('/interaction/:uid/password', noStore, loginLimiter, formBody, async (r
   }
 });
 
-app.post('/interaction/:uid/wecom/start', noStore, loginLimiter, formBody, async (req, res, next) => {
+router.post('/interaction/:uid/wecom/start', noStore, loginLimiter, formBody, async (req, res, next) => {
   try {
     const { details, appName } = await interactionContext(req, res);
     if (!config.wecom.enabled) {
@@ -223,7 +224,7 @@ app.post('/interaction/:uid/wecom/start', noStore, loginLimiter, formBody, async
   }
 });
 
-app.post('/interaction/:uid/wecom/status', noStore, jsonBody, async (req, res, next) => {
+router.post('/interaction/:uid/wecom/status', noStore, jsonBody, async (req, res, next) => {
   try {
     const { details } = await interactionContext(req, res);
     const status = await readTransactionStatus(
@@ -238,7 +239,7 @@ app.post('/interaction/:uid/wecom/status', noStore, jsonBody, async (req, res, n
   }
 });
 
-app.post('/interaction/:uid/wecom/complete', noStore, loginLimiter, formBody, async (req, res, next) => {
+router.post('/interaction/:uid/wecom/complete', noStore, loginLimiter, formBody, async (req, res, next) => {
   try {
     const { details } = await interactionContext(req, res);
     if (details.prompt.name !== 'login' || !(await consumeCsrf(details.uid, req.body.csrf))) {
@@ -270,7 +271,7 @@ app.post('/interaction/:uid/wecom/complete', noStore, loginLimiter, formBody, as
   }
 });
 
-app.get('/wecom/mobile', noStore, async (req, res) => {
+router.get('/wecom/mobile', noStore, async (req, res) => {
   try {
     const valid = await validateMobileTransaction(req.query.transaction_id, req.query.state);
     if (!valid) return res.status(400).type('html').send(messagePage('二维码已失效', '请返回电脑端重新获取二维码。'));
@@ -280,7 +281,7 @@ app.get('/wecom/mobile', noStore, async (req, res) => {
   }
 });
 
-app.get('/wecom/callback', noStore, async (req, res) => {
+router.get('/wecom/callback', noStore, async (req, res) => {
   const transaction = await findTransactionByState(req.query.state);
   if (!transaction || !req.query.code) {
     return res.status(400).type('html').send(messagePage('验证失败', '二维码已失效，请返回电脑端重试。'));
@@ -303,13 +304,15 @@ app.get('/wecom/callback', noStore, async (req, res) => {
   }
 });
 
-app.use(provider.callback());
+router.use(provider.callback());
 
-app.use((error, req, res, _next) => {
+router.use((error, req, res, _next) => {
   console.error('request failed', { method: req.method, path: req.path, message: error.message });
   if (res.headersSent) return;
   res.status(500).type('html').send(messagePage('服务暂时不可用', '请稍后重试。'));
 });
+
+app.use(config.publicBasePath || '/', router);
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Enterprise SSO listening on ${config.host}:${config.port}; issuer=${config.issuer}`);

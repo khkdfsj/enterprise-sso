@@ -11,12 +11,14 @@ for (const file of [database, `${database}-wal`, `${database}-shm`, jwks]) fs.rm
 
 const password = 'CI-only-password-2026';
 const clientSecret = 'ci-only-client-secret-not-for-production';
+const publicPrefix = String(process.env.CI_PUBLIC_PREFIX ?? '').replace(/\/$/, '');
+const issuer = `http://127.0.0.1:3000${publicPrefix}`;
 const env = {
   ...process.env,
   NODE_ENV: 'development',
   HOST: '127.0.0.1',
   PORT: '3000',
-  ISSUER: 'http://127.0.0.1:3000',
+  ISSUER: issuer,
   DB_FILE: database,
   COOKIE_KEYS: 'ci-cookie-key-one-at-least-thirty-two-characters,ci-cookie-key-two-at-least-thirty-two-characters',
   OIDC_JWKS_FILE: jwks,
@@ -31,6 +33,7 @@ const env = {
   E2E_USERNAME: 'admin',
   E2E_PASSWORD: password,
   E2E_DB_FILE: database,
+  E2E_ISSUER: issuer,
 };
 
 function run(script) {
@@ -48,7 +51,7 @@ try {
   for (let attempt = 0; attempt < 150; attempt += 1) {
     if (server.exitCode !== null) throw new Error(`Test server exited with ${server.exitCode}`);
     try {
-      const response = await fetch('http://127.0.0.1:3000/healthz');
+      const response = await fetch(`${issuer}/healthz`);
       if (response.ok) {
         healthy = true;
         break;

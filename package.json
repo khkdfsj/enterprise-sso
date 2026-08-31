@@ -23,6 +23,7 @@
     "test:e2e": "node scripts/e2e-login.js",
     "test:turnover": "node scripts/e2e-turnover.js",
     "test:ci-e2e": "node scripts/ci-e2e.js",
+    "test:ci-prefix-e2e": "node scripts/ci-prefix-e2e.js",
     "test": "node --test",
     "check": "node scripts/check-syntax.js"
   },

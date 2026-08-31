@@ -36,7 +36,7 @@ function readSession(req) {
   } catch { return null; }
 }
 function cookie(value, maxAge = 7200) {
-  return `enterprise_admin=${value}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
+  return `enterprise_admin=${value}; Path=${publicUrl('/admin')}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
 }
 async function requireAdmin(req, res, next) {
   const session = readSession(req);

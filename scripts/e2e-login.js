@@ -8,7 +8,7 @@ const password = process.env.E2E_PASSWORD;
 const redirectUri = process.env.E2E_REDIRECT_URI ?? 'http://127.0.0.1:8080/callback';
 
 if (!clientSecret || !password) throw new Error('Set E2E_CLIENT_SECRET and E2E_PASSWORD');
-if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(issuer)) {
+if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(?:\/enterprise-sso)?$/i.test(issuer)) {
   throw new Error('This destructive-login test is limited to a loopback issuer');
 }
 
@@ -64,13 +64,14 @@ if (response.status !== 200 || !loginHtml.includes('企业统一身份认证')) 
 const csrf = loginHtml.match(/name="csrf" value="([^"]+)"/)?.[1];
 if (!csrf) throw new Error('Hosted login did not contain CSRF token');
 const interaction = new URL(current);
+const passwordUrl = new URL(`${interaction.pathname}/password`, interaction.origin).toString();
 
-response = await request(`${issuer}${interaction.pathname}/password`, {
+response = await request(passwordUrl, {
   method: 'POST',
   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   body: new URLSearchParams({ csrf, username, password }),
 });
-current = nextUrl(`${issuer}${interaction.pathname}/password`, response);
+current = nextUrl(passwordUrl, response);
 
 for (let redirects = 0; redirects < 8 && !current.startsWith(redirectUri); redirects += 1) {
   response = await request(current);
