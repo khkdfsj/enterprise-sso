@@ -68,6 +68,7 @@ try {
   run('scripts/e2e-provisioning.js');
   run('scripts/e2e-agent.js');
   run('scripts/e2e-turnover.js');
+  run('scripts/e2e-turnover-workflow.js');
 } finally {
   if (server && server.exitCode === null) {
     const exited = new Promise((resolve) => server.once('exit', resolve));

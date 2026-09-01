@@ -5,6 +5,11 @@ const nowSql = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 async function activateTerm(connection, term) {
   const effectiveAt = term.starts_at;
+  const [workflowRows] = await connection.execute(
+    "SELECT source_term_id FROM turnover_workflows WHERE target_term_id=? AND status='published' LIMIT 1",
+    [term.id],
+  );
+  const workflow = workflowRows[0];
   await connection.execute(
     `UPDATE appointments
      SET status='ended',ends_at=CASE WHEN ends_at>? THEN ? ELSE ends_at END,updated_at=${nowSql}
@@ -35,6 +40,29 @@ async function activateTerm(connection, term) {
      )`,
     [term.id, effectiveAt],
   );
+  if (workflow) {
+    await connection.execute(
+      `UPDATE people SET status='retired',authorization_version=authorization_version+1,updated_at=${nowSql}
+       WHERE permanent_member=0
+         AND id IN (SELECT person_id FROM appointments WHERE term_id=?)
+         AND id NOT IN (SELECT person_id FROM appointments WHERE term_id=?)`,
+      [workflow.source_term_id, term.id],
+    );
+    await connection.execute(
+      `UPDATE accounts SET status='suspended',updated_at=${nowSql}
+       WHERE person_id IN (SELECT id FROM people WHERE status='retired' AND permanent_member=0)`,
+    );
+    await connection.execute(
+      `UPDATE people SET status='active',updated_at=${nowSql}
+       WHERE id IN (SELECT person_id FROM appointments WHERE term_id=?)`,
+      [term.id],
+    );
+    await connection.execute(
+      `UPDATE accounts SET status='active',failed_attempts=0,locked_until=NULL,updated_at=${nowSql}
+       WHERE person_id IN (SELECT person_id FROM appointments WHERE term_id=?)`,
+      [term.id],
+    );
+  }
   await connection.execute(
     `UPDATE term_publications SET activated_at=${nowSql} WHERE term_id=?`,
     [term.id],

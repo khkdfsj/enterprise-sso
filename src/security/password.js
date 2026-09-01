@@ -10,8 +10,8 @@ const options = {
 };
 
 export async function hashPassword(password) {
-  if (typeof password !== 'string' || password.length < 10 || password.length > 200) {
-    throw new Error('Password must contain 10 to 200 characters');
+  if (typeof password !== 'string' || password.length < 6 || password.length > 200) {
+    throw new Error('Password must contain 6 to 200 characters');
   }
   return hash(password, options);
 }
@@ -24,4 +24,3 @@ export async function verifyPassword(encoded, password) {
     return false;
   }
 }
-

@@ -61,8 +61,10 @@
 - 新增接入向导：`http://210.47.163.114/enterprise-sso/admin/applications/new`
 - 连通与监控：`http://210.47.163.114/enterprise-sso/admin/monitoring`
 - 人员与账号：`http://210.47.163.114/enterprise-sso/admin/people`
+- 新增人员：`http://210.47.163.114/enterprise-sso/admin/people/new`
 - 部门与职位：`http://210.47.163.114/enterprise-sso/admin/organization`
 - 届次换届：`http://210.47.163.114/enterprise-sso/admin/terms`
+- 开始五步换届：`http://210.47.163.114/enterprise-sso/admin/turnovers/new`
 - 登录会话：`http://210.47.163.114/enterprise-sso/admin/sessions`
 - 审计日志：`http://210.47.163.114/enterprise-sso/admin/audit`
 - 接入文档：`http://210.47.163.114/enterprise-sso/admin/integration`
