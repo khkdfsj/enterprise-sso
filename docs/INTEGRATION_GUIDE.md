@@ -197,6 +197,8 @@ require_once dirname(__DIR__) . '/ESSO-DFSJ/login.php';
 
 业务按钮没有调用 `ESSO-DFSJ/logout.php`，只删除了业务自己的 Session，统一会话仍然有效。
 
+标准包会在服务端 Session 中短时保存 `id_token`，注销时作为 `id_token_hint` 发送给 ESSO；这样认证中心能确定需要结束的统一会话，并在完成后回到登记的注销验收或业务地址。该令牌不会返回业务前端或写入日志。
+
 ### 企业微信提示回调域错误
 
 这是 ESSO 平台侧企业微信可信域名配置问题，不是普通业务接入包问题。不要把 CorpSecret 复制到业务系统。

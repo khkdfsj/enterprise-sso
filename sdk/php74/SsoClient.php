@@ -126,6 +126,7 @@ final class EnterpriseSsoClient
         }
         session_regenerate_id(true);
         $_SESSION['enterprise_sso_user'] = $user;
+        $_SESSION['enterprise_sso_id_token'] = isset($token['id_token']) && is_string($token['id_token']) ? $token['id_token'] : null;
         $_SESSION['enterprise_sso_authenticated_at'] = time();
         $_SESSION['enterprise_sso_last_seen_at'] = time();
         header('Location: ' . $flow['return_to'], true, 303);
@@ -135,7 +136,9 @@ final class EnterpriseSsoClient
     public function logout($returnTo = '/', $overridePostLogoutRedirectUri = null)
     {
         $this->startSession();
-        unset($_SESSION['enterprise_sso_user'], $_SESSION['enterprise_sso_authenticated_at'], $_SESSION['enterprise_sso_last_seen_at']);
+        $idToken = isset($_SESSION['enterprise_sso_id_token']) && is_string($_SESSION['enterprise_sso_id_token'])
+            ? $_SESSION['enterprise_sso_id_token'] : '';
+        unset($_SESSION['enterprise_sso_user'], $_SESSION['enterprise_sso_id_token'], $_SESSION['enterprise_sso_authenticated_at'], $_SESSION['enterprise_sso_last_seen_at']);
         session_regenerate_id(true);
         $discovery = $this->discovery();
         if (!isset($discovery['end_session_endpoint']) || !is_string($discovery['end_session_endpoint'])) {
@@ -155,6 +158,7 @@ final class EnterpriseSsoClient
         $query = http_build_query(array(
             'client_id' => $this->clientId,
             'post_logout_redirect_uri' => $postLogout,
+            'id_token_hint' => $idToken,
         ), '', '&', PHP_QUERY_RFC3986);
         header('Location: ' . $discovery['end_session_endpoint'] . '?' . $query, true, 303);
         exit;
