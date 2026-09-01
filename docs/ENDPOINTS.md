@@ -1,5 +1,16 @@
 # Enterprise SSO 全部地址清单
 
+## Agent 自动接入 API
+
+以下接口都要求 `Authorization: Bearer`、`X-ESSO-Agent-Identity` 和 `X-Request-ID`；完整请求体、幂等语义和错误码见 [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)。
+
+- `GET /api/v1/agent/capabilities`：读取可用字段、固定包名和测试能力。
+- `POST /api/v1/agent/services`：幂等登记服务并生成一次性包令牌。
+- `GET /api/v1/agent/services/:id/package`：携带 `X-ESSO-Package-Token` 下载 `ESSO-DFSJ.zip`。
+- `GET /api/v1/agent/services/:id`：查询服务地址和三项验收状态。
+- `POST /api/v1/agent/services/:id/monitor`：启动 30 分钟持续连通监控。
+- `POST /api/v1/agent/services/:id/tests/connectivity`：立即执行 Client Secret 签名连通检测。
+
 ## 用户访问地址
 
 | 用途 | 地址 | 说明 |

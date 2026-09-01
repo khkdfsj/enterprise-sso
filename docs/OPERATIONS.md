@@ -1,5 +1,19 @@
 # 生产运维、发布与回滚
 
+## 签发 Agent 接入凭据
+
+推荐在后台“新增接入服务 → 管理 Agent 凭据”中签发。无浏览器的应急运维可使用：
+
+```bash
+AGENT_IDENTITY='codex:team:dfsj-maintainer' \
+AGENT_DISPLAY_NAME='Codex 运维 Agent' \
+AGENT_CREATED_BY='2023195077' \
+AGENT_VALID_DAYS='30' \
+npm run agent:create-credential
+```
+
+命令只显示一次 Agent Token。不得把输出写入仓库或共享日志；使用结束后在后台撤销。完整调用规范见 [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)。
+
 ## 服务拓扑
 
 114：

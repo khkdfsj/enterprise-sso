@@ -17,6 +17,7 @@
 - OIDC 标准注销、会话查看与管理员强制注销
 - 业务系统发起的一次性快捷注册
 - PHP 7.4 固定 `ESSO-DFSJ` 接入包：业务页面只需引入 `login.php`
+- 带身份标记、幂等注册、一次性包下载和三项验收状态的 Agent 自动接入 API
 
 ## 当前生产入口
 
@@ -32,6 +33,8 @@
 2. 下载一次性的 `ESSO-DFSJ.zip`。
 3. 将完整的 `ESSO-DFSJ` 文件夹放进业务项目根目录，禁止更名。
 4. 在受保护 PHP 页面第一行引入 `ESSO-DFSJ/login.php`，从 `$ssoUser['sub']` 取得唯一 UserID。
+
+AI Agent 接入请先阅读 [Agent 自动接入规范](docs/AGENT_INTEGRATION.md) 和仓库 Skill：[`skills/enterprise-sso-integration`](skills/enterprise-sso-integration/SKILL.md)。Agent API 与后台向导生成完全相同的 `ESSO-DFSJ.zip`，生产令牌和 Client Secret 不写入仓库。
 5. 使用 `$essoLogoutUrl` 统一注销，完成健康、真实登录、真实注销三项验收。
 6. 验收后删除两个 `test-*.php`，保留 `health.php`。
 

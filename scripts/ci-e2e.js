@@ -66,6 +66,7 @@ try {
   run('scripts/e2e-login.js');
   run('scripts/e2e-admin.js');
   run('scripts/e2e-provisioning.js');
+  run('scripts/e2e-agent.js');
   run('scripts/e2e-turnover.js');
 } finally {
   if (server && server.exitCode === null) {

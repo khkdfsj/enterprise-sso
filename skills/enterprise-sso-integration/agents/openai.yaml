@@ -1,4 +1,4 @@
 interface:
   display_name: "ESSO-DFSJ Integration"
-  short_description: "Integrate internal apps with the ESSO-DFSJ package"
-  default_prompt: "Use $enterprise-sso-integration to integrate this application with the generated ESSO-DFSJ package and complete login, logout, and connectivity checks."
+  short_description: "Register and integrate apps through the ESSO-DFSJ Agent API"
+  default_prompt: "Use $enterprise-sso-integration, identify yourself with the assigned stable Agent identity, register this application through the authenticated ESSO Agent API, deploy the generated ESSO-DFSJ package, and complete connectivity, login, and logout checks without exposing secrets."

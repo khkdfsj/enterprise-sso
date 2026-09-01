@@ -1,5 +1,45 @@
 # ESSO-DFSJ integration reference
 
+## Headless Agent registration API
+
+Use this flow when the operator provides an Agent credential. All requests require these headers:
+
+```http
+Authorization: Bearer <secret-agent-token>
+X-ESSO-Agent-Identity: <stable identity bound to that token>
+X-Request-ID: <stable unique id for this logical operation>
+```
+
+Never place tokens in URLs, Git, chat output, shell history intended for sharing, or application frontend code. Registration JSON must repeat `agent_identity`; all identity values must match. Reuse the same request ID after an uncertain result so registration remains idempotent.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/v1/agent/capabilities` | Discover supported fields, package and tests |
+| `POST /api/v1/agent/services` | Register one service and receive a one-time package token |
+| `GET /api/v1/agent/services/{id}/package` | Download `ESSO-DFSJ.zip`; also send `X-ESSO-Package-Token` |
+| `POST /api/v1/agent/services/{id}/monitor` | Enable temporary continuous connectivity monitoring |
+| `POST /api/v1/agent/services/{id}/tests/connectivity` | Run the signed health check immediately |
+| `GET /api/v1/agent/services/{id}` | Read endpoints and connectivity/login/logout status |
+
+Registration body:
+
+```json
+{
+  "agent_identity": "codex:team:dfsj-maintainer",
+  "name": "Example Admin",
+  "project_root_url": "http://210.47.163.114/qywx/Example/",
+  "client_id": "optional-client-id",
+  "access_mode": "rules",
+  "provisioning_enabled": false
+}
+```
+
+Required: `agent_identity`, `name`, `project_root_url`. `client_id` is optional. The API derives the exact callback, logout, health, login-test, and logout-test URLs. It returns only one package token; consume it within 15 minutes. Only the credential that created the service may query it through the Agent API.
+
+The connectivity test is machine-executable. Login and logout are real browser acceptance tests: open the URLs returned in `tests.login.url` and `tests.logout.url`, then poll the service resource until all statuses are `passed`. Do not claim acceptance from HTTP reachability alone.
+
+For complete request examples, error codes, and reporting requirements, read the repository document `docs/AGENT_INTEGRATION.md`.
+
 ## Preferred generated-package contract
 
 The onboarding wizard takes the application's browser-visible root URL and derives all protocol URLs below it. It returns a one-time `ESSO-DFSJ.zip`; the extracted directory name is part of the integration contract and must not change.

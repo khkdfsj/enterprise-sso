@@ -5,7 +5,19 @@ description: Integrate an internal application with ESSO-DFSJ hosted login, User
 
 # ESSO-DFSJ application integration
 
-Prefer the ESSO onboarding wizard and its generated package over hand-written protocol code. The application must not build its own ESSO password form, receive an ESSO password, copy the central session cookie, or call WeCom directly.
+Prefer the authenticated Agent API and its generated package when an Agent credential is available. Otherwise use the ESSO onboarding wizard. Both paths generate the same package. The application must not build its own ESSO password form, receive an ESSO password, copy the central session cookie, or call WeCom directly.
+
+## Agent API workflow
+
+1. Ask the operator for the ESSO Issuer, an Agent token, and the stable identity assigned to that token. Never ask for an administrator password or a business Client Secret.
+2. Choose a stable `agent_identity`, send it in `X-ESSO-Agent-Identity` and in registration JSON, and send a stable unique `X-Request-ID` for every logical operation. Do not silently change a request ID after an uncertain response.
+3. Call `GET /api/v1/agent/capabilities`, then `POST /api/v1/agent/services` with the service name and browser-visible project root URL.
+4. Download the one-time package from the returned link with `X-ESSO-Package-Token`. Do not print, log, or commit the Agent token, package token, generated `config.php`, or Client Secret.
+5. Extract the complete `ESSO-DFSJ` directory into the project root without renaming it. Add `require_once .../ESSO-DFSJ/login.php` before protected-page output and use `$essoLogoutUrl` for logout.
+6. Start monitoring and request the connectivity test through the Agent API. Then use the returned browser URLs for real login and logout tests. Poll service status until all three tests pass.
+7. Delete only `test-login.php` and `test-logout.php` after acceptance; retain `health.php` for monitoring. Report the identity marker, service ID, Client ID, deployment path, and test results without secrets.
+
+Read [references/integration-api.md](references/integration-api.md) before making Agent API calls. It defines headers, idempotency, endpoints, payloads, package handling, and error recovery.
 
 ## Before changing an application
 

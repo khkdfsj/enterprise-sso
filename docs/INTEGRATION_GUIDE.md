@@ -1,5 +1,7 @@
 # ESSO-DFSJ 应用接入完整指南
 
+AI Agent 自动登记和测试的请求契约见 [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)。图形向导和 Agent API 最终都下载并部署本文所述的同一个固定包。
+
 ## 1. 系统解决什么问题
 
 ESSO 是 Enterprise Single Sign-On 的简称。业务系统不再制作登录页、不保存统一密码，也不直接处理企业微信 CorpSecret。用户在 ESSO 完成一次账号密码或企业微信扫码认证后，在会话有效期内可免密进入其他已授权系统。
