@@ -111,6 +111,17 @@ function formatTime(value) {
   const formatted = formatBeijingTime(value);
   return formatted ? esc(formatted) : '—';
 }
+function datetimeLocalBeijing(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(date).replace(' ', 'T');
+}
+function adminInputError(message, status = 400) {
+  return Object.assign(new Error(message), { expose: true, status });
+}
 function validateRedirectUri(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('回调地址必须是完整 URL'); }
@@ -631,7 +642,16 @@ router.get('/turnovers/new', requireAdmin, async (req, res) => {
   if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
   const [terms] = await pool.execute("SELECT * FROM organization_terms WHERE status='active' ORDER BY starts_at DESC");
   const year = new Date().getFullYear();
-  res.send(adminPage(req, '开始换届', 'terms', `${turnoverSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>确定目标届次与新委员年级</h2><p>保存后立即建立换届草稿，之后可以随时退出并继续。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/turnovers')}">${csrf(req)}<label>当前生效届次<select name="source_term_id">${terms.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label><label>新委员年级<input name="target_grade_year" type="number" min="2000" max="2200" value="${year}" required></label><label>目标届次编号<input name="target_term_id" value="term-${year}-${year + 1}" pattern="[A-Za-z0-9_.-]{3,120}" required></label><label>目标届次名称<input name="target_term_name" value="${year}—${year + 1} 届" required></label><label>开始时间<input type="datetime-local" name="starts_at" required></label><label>结束时间<input type="datetime-local" name="ends_at" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/terms')}">取消</a><button class="button primary">保存并进入第二步</button></div></form></section>`, '第一步保存后即支持断点续办'));
+  const source = terms[0];
+  const sourceYears = String(source?.id ?? '').match(/^term-(\d{4})-(\d{4})$/);
+  const targetStartYear = sourceYears ? Number(sourceYears[2]) : year;
+  const targetTermId = `term-${targetStartYear}-${targetStartYear + 1}`;
+  const targetTermName = `${targetStartYear}—${targetStartYear + 1} 届`;
+  const startsAt = datetimeLocalBeijing(source?.ends_at ?? new Date());
+  const targetEnd = new Date(source?.ends_at ?? Date.now());
+  targetEnd.setUTCFullYear(targetEnd.getUTCFullYear() + 1);
+  const endsAt = datetimeLocalBeijing(targetEnd);
+  res.send(adminPage(req, '开始换届', 'terms', `${turnoverSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>确定目标届次与新委员年级</h2><p>保存后立即建立换届草稿，之后可以随时退出并继续。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/turnovers')}">${csrf(req)}<label>当前生效届次<select name="source_term_id">${terms.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label><label>新委员年级<input name="target_grade_year" type="number" min="2000" max="2200" value="${year}" required></label><label>目标届次编号<input name="target_term_id" value="${esc(targetTermId)}" pattern="[A-Za-z0-9_.-]{3,120}" required></label><label>目标届次名称<input name="target_term_name" value="${esc(targetTermName)}" required></label><label>开始时间<input type="datetime-local" name="starts_at" value="${esc(startsAt)}" required></label><label>结束时间<input type="datetime-local" name="ends_at" value="${esc(endsAt)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/terms')}">取消</a><button class="button primary">保存并进入第二步</button></div></form></section>`, '第一步保存后即支持断点续办'));
 });
 
 router.post('/turnovers', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
@@ -639,11 +659,19 @@ router.post('/turnovers', requireAdmin, body, requireCsrf, async (req, res, next
   const grade = Number(req.body.target_grade_year);
   const startsAt = parseBeijingLocalTime(req.body.starts_at);
   const endsAt = parseBeijingLocalTime(req.body.ends_at);
-  if (!Number.isInteger(grade) || grade < 2000 || grade > 2200 || startsAt >= endsAt) throw new Error('届次时间或年级不正确');
-  const id = await createTurnoverWorkflow({ sourceTermId: req.body.source_term_id, targetTermId: String(req.body.target_term_id).trim(), targetTermName: String(req.body.target_term_name).trim(), targetGradeYear: grade, startsAt, endsAt }, req.admin.person.id);
+  const targetTermId = String(req.body.target_term_id ?? '').trim();
+  const targetTermName = String(req.body.target_term_name ?? '').trim();
+  if (!Number.isInteger(grade) || grade < 2000 || grade > 2200) throw adminInputError('新委员年级不正确。');
+  if (!/^[A-Za-z0-9_.-]{3,120}$/.test(targetTermId)) throw adminInputError('目标届次编号格式不正确。');
+  if (!targetTermName || targetTermName.length > 160) throw adminInputError('目标届次名称不正确。');
+  if (startsAt >= endsAt) throw adminInputError('结束时间必须晚于开始时间。');
+  const id = await createTurnoverWorkflow({ sourceTermId: req.body.source_term_id, targetTermId, targetTermName, targetGradeYear: grade, startsAt, endsAt }, req.admin.person.id);
   await audit(req, 'turnover_workflow_create', 'success', { actorPersonId: req.admin.person.id, targetType: 'turnover_workflow', targetId: id });
   res.redirect(publicUrl(`/admin/turnovers/${encodeURIComponent(id)}`));
-} catch (error) { next(error); } });
+} catch (error) {
+  if (!error.expose && error.message !== '时间格式不正确') return next(error);
+  res.status(error.status ?? 400).send(adminPage(req, '无法建立换届草稿', 'terms', `<div class="notice danger-notice"><strong>请检查第一步信息</strong><p>${esc(error.message)}</p></div><section class="table-panel"><div class="page-actions"><div><h2>本次没有写入任何换届数据</h2><p>修改目标届次编号或时间后可以重新提交。</p></div><a class="button primary" href="${publicUrl('/admin/turnovers/new')}">返回第一步</a></div></section>`, '输入校验未通过'));
+} });
 
 router.get('/turnovers/:id', requireAdmin, async (req, res) => {
   const [[workflows], [departments], [positions]] = await Promise.all([

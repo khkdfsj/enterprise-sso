@@ -5,14 +5,21 @@ import { hashPassword } from '../security/password.js';
 
 const nowSql = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
+function workflowInputError(message, status = 400) {
+  return Object.assign(new Error(message), { expose: true, status });
+}
+
 export async function createTurnoverWorkflow(values, actorPersonId) {
   const id = randomUUID();
   const now = new Date().toISOString();
   await withTransaction(async (connection) => {
     const [source] = await connection.execute("SELECT id FROM organization_terms WHERE id=? AND status='active'", [values.sourceTermId]);
-    if (!source[0]) throw new Error('请选择当前生效届次');
+    if (!source[0]) throw workflowInputError('请选择当前生效届次');
+    if (values.targetTermId === values.sourceTermId) throw workflowInputError('目标届次不能与当前生效届次相同，请使用下一届编号。', 409);
     const [running] = await connection.execute("SELECT id FROM turnover_workflows WHERE status='draft' LIMIT 1");
-    if (running[0]) throw new Error('已有未完成换届，请先继续该流程');
+    if (running[0]) throw workflowInputError('已有未完成换届，请先继续该流程。', 409);
+    const [target] = await connection.execute('SELECT id,name FROM organization_terms WHERE id=? LIMIT 1', [values.targetTermId]);
+    if (target[0]) throw workflowInputError(`届次编号 ${values.targetTermId} 已存在，请使用新的下一届编号。`, 409);
     await connection.execute(
       "INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES (?,?,?,?,'draft',?,?)",
       [values.targetTermId, values.targetTermName, values.startsAt, values.endsAt, now, now],

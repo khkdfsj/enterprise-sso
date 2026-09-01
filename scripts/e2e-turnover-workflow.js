@@ -52,6 +52,12 @@ try {
   throw error;
 }
 
+await assert.rejects(
+  createTurnoverWorkflow({ sourceTermId: sourceTerm, targetTermId: sourceTerm, targetTermName: '重复届次', targetGradeYear: 2026, startsAt: effectiveAt, endsAt: future }, admin.id),
+  /目标届次不能与当前生效届次相同/,
+);
+assert.equal(database.prepare('SELECT COUNT(*) count FROM turnover_workflows').get().count, 0);
+
 const workflowId = await createTurnoverWorkflow({ sourceTermId: sourceTerm, targetTermId: targetTerm, targetTermName: '测试新一届', targetGradeYear: 2026, startsAt: effectiveAt, endsAt: future }, admin.id);
 await saveRetainedMembers(workflowId, [people.member, people.vice]);
 let proposals = database.prepare(`SELECT m.user_id,p.code FROM turnover_workflow_members m JOIN positions p ON p.id=m.proposed_position_id WHERE m.workflow_id=? ORDER BY m.user_id`).all(workflowId);

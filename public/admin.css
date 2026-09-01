@@ -172,6 +172,7 @@ pre { max-height: 360px; margin: 0; padding: 14px; overflow: auto; background: #
 .security-actions p { color: var(--muted); font-size: 12px; }
 .notice { padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--line); font-size: 12px; }
 .notice.success-notice { border-color: #b7ebd1; background: #f0fbf5; color: #176b4b; }
+.notice.danger-notice { border-color: #efb8b3; background: #fff5f4; color: #a62727; }
 .secret-row { display: flex; align-items: center; gap: 8px; }
 .secret { display: block; min-width: 0; padding: 9px; overflow: auto; border: 1px solid var(--line); background: #fafbfc; }
 .detail-list > div { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--soft-line); }
