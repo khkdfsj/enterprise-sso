@@ -1,5 +1,6 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import express from 'express';
+import { config } from '../config.js';
 import { pool } from '../db.js';
 import { decryptJson } from '../security/crypto.js';
 import { messagePage } from '../views/html.js';
@@ -26,6 +27,29 @@ function matchesProof(actual, expected) {
     && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }
 
+function signPayload(payload) {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', config.cookieKeys[0]).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function readPayload(raw) {
+  const [encoded, signature] = String(raw ?? '').split('.');
+  if (!encoded || !signature) return null;
+  const expected = createHmac('sha256', config.cookieKeys[0]).update(encoded).digest('base64url');
+  if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  try { return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { return null; }
+}
+
+function cookieValue(req, name) {
+  return String(req.headers.cookie ?? '').split(';').map((item) => item.trim())
+    .find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? '';
+}
+
+function testCookie(value, maxAge) {
+  return `esso_logout_test=${value}; Path=${config.publicBasePath || ''}/api/v1/integration-tests/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
+}
+
 router.get('/api/v1/integration-tests/:id/login', async (req, res) => {
   const sub = String(req.query.sub ?? '').trim();
   const timestamp = validTimestamp(req.query.ts);
@@ -39,13 +63,27 @@ router.get('/api/v1/integration-tests/:id/login', async (req, res) => {
   return res.type('html').send(messagePage('登录验收通过', `已验证 UserID ${sub}，Agent 可继续执行注销验收。`));
 });
 
-router.get('/api/v1/integration-tests/:id/logout', async (req, res) => {
+router.get('/api/v1/integration-tests/:id/logout/start', async (req, res) => {
   const timestamp = validTimestamp(req.query.ts);
   const secret = await clientSecret(req.params.id);
   if (!timestamp || !secret) return res.status(400).type('html').send(messagePage('注销验收失败', '验收凭据无效或已经超过五分钟。'));
   const expected = createHmac('sha256', secret).update(`logout|${timestamp}`).digest('hex');
   if (!matchesProof(String(req.query.proof ?? ''), expected)) return res.status(403).type('html').send(messagePage('注销验收失败', '客户端签名不正确。'));
+  const [apps] = await pool.execute('SELECT home_url FROM applications WHERE id=? AND status=\'active\'', [req.params.id]);
+  if (!apps[0]?.home_url) return res.status(404).type('html').send(messagePage('注销验收失败', '接入服务不存在。'));
+  const armedUrl = new URL('ESSO-DFSJ/test-logout.php?armed=1', apps[0].home_url).toString();
+  const state = signPayload({ applicationId: req.params.id, nonce: randomBytes(16).toString('base64url'), expires: Date.now() + 5 * 60_000 });
+  res.setHeader('Set-Cookie', testCookie(state, 300));
+  return res.redirect(303, armedUrl);
+});
+
+router.get('/api/v1/integration-tests/:id/logout', async (req, res) => {
+  const state = readPayload(cookieValue(req, 'esso_logout_test'));
+  if (!state || state.applicationId !== req.params.id || state.expires <= Date.now()) {
+    return res.status(400).type('html').send(messagePage('注销验收失败', '验收状态无效或已经超过五分钟。'));
+  }
   await pool.execute("UPDATE applications SET logout_test_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [req.params.id]);
+  res.setHeader('Set-Cookie', testCookie('', 0));
   return res.type('html').send(messagePage('注销验收通过', '业务 Session 与统一认证注销流程已经完成。'));
 });
 

@@ -75,7 +75,11 @@ const loginProof = createHmac('sha256', clientSecret).update(`login|${admins[0].
 response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/login?sub=${encodeURIComponent(admins[0].person_id)}&ts=${timestamp}&proof=${loginProof}`);
 assert.equal(response.status, 200);
 const logoutProof = createHmac('sha256', clientSecret).update(`logout|${timestamp}`).digest('hex');
-response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/logout?ts=${timestamp}&proof=${logoutProof}`);
+response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/logout/start?ts=${timestamp}&proof=${logoutProof}`, { redirect: 'manual' });
+assert.equal(response.status, 303);
+assert.match(response.headers.get('location'), /ESSO-DFSJ\/test-logout\.php\?armed=1$/);
+const logoutCookie = response.headers.getSetCookie()[0].split(';', 1)[0];
+response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/logout`, { headers: { cookie: logoutCookie } });
 assert.equal(response.status, 200);
 response = await fetch(`${issuer}/api/v1/agent/services/${serviceId}`, { headers: headers('agent-service-status-0002') });
 payload = await response.json();

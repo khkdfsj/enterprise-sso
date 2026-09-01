@@ -12,6 +12,7 @@
 - `POST /api/v1/agent/services/:id/tests/connectivity`：立即执行 Client Secret 签名连通检测。
 - `GET /api/v1/integration-tests/:id/login`：接收 `test-login.php` 的短时 HMAC 登录验收回报。
 - `GET /api/v1/integration-tests/:id/logout`：接收 `test-logout.php` 的短时 HMAC 注销验收回报。
+- `GET /api/v1/integration-tests/:id/logout/start`：校验客户端 HMAC 并建立五分钟注销验收状态。
 
 ## 用户访问地址
 

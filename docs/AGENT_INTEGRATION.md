@@ -126,7 +126,7 @@ Agent 打开或交给操作者打开响应中的：
 1. `tests.login.url`：完成账号密码或企业微信扫码登录；
 2. `tests.logout.url`：确认业务 Session 和 ESSO Session 均被清理。
 
-两个测试页会用客户端密钥、五分钟时间戳和 HMAC 签名回报独立验收端点；它们不依赖管理后台 Session，也不接受 Agent 自报成功。Agent 轮询服务状态，直到三项测试均为 `passed`。测试完成后删除业务服务器中的 `ESSO-DFSJ/test-login.php` 和 `ESSO-DFSJ/test-logout.php`；长期保留 `health.php` 供监控使用。
+两个测试页会用客户端密钥、五分钟时间戳和 HMAC 签名回报独立验收端点；它们不依赖管理后台 Session，也不接受 Agent 自报成功。注销采用两段式验收：签名启动短时状态，再通过预登记的固定 OIDC 回跳地址确认统一会话确实结束，绝不使用未登记的动态回跳 URL。Agent 轮询服务状态，直到三项测试均为 `passed`。测试完成后删除业务服务器中的 `ESSO-DFSJ/test-login.php` 和 `ESSO-DFSJ/test-logout.php`；长期保留 `health.php` 供监控使用。
 
 ## 4. Agent 完成报告
 
