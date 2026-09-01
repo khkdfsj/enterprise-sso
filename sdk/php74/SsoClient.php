@@ -14,6 +14,7 @@ final class EnterpriseSsoClient
     private $sessionName;
     private $sessionPath;
     private $allowInsecureHttp;
+    private $postLogoutRedirectUri;
 
     public function __construct(array $config)
     {
@@ -33,6 +34,8 @@ final class EnterpriseSsoClient
         $this->sessionName = isset($config['session_name']) ? (string) $config['session_name'] : 'ENTERPRISE_SSO_SID';
         $this->sessionPath = isset($config['session_path']) ? (string) $config['session_path'] : '/';
         $this->allowInsecureHttp = !empty($config['allow_insecure_http']);
+        $this->postLogoutRedirectUri = isset($config['post_logout_redirect_uri'])
+            ? (string) $config['post_logout_redirect_uri'] : '';
         if (stripos($this->issuer, 'https://') !== 0 && !($this->allowInsecureHttp && stripos($this->issuer, 'http://') === 0)) {
             throw new RuntimeException('SSO issuer must use HTTPS');
         }
@@ -129,12 +132,31 @@ final class EnterpriseSsoClient
         exit;
     }
 
-    public function logout($returnTo = '/')
+    public function logout($returnTo = '/', $overridePostLogoutRedirectUri = null)
     {
         $this->startSession();
         unset($_SESSION['enterprise_sso_user'], $_SESSION['enterprise_sso_authenticated_at'], $_SESSION['enterprise_sso_last_seen_at']);
         session_regenerate_id(true);
-        header('Location: ' . $this->safeReturnTo($returnTo), true, 303);
+        $discovery = $this->discovery();
+        if (!isset($discovery['end_session_endpoint']) || !is_string($discovery['end_session_endpoint'])) {
+            header('Location: ' . $this->safeReturnTo($returnTo), true, 303);
+            exit;
+        }
+        $postLogout = is_string($overridePostLogoutRedirectUri) && $overridePostLogoutRedirectUri !== ''
+            ? $overridePostLogoutRedirectUri : $this->postLogoutRedirectUri;
+        if ($postLogout === '') {
+            $redirect = parse_url($this->redirectUri);
+            if (!is_array($redirect) || empty($redirect['scheme']) || empty($redirect['host'])) {
+                throw new RuntimeException('Invalid redirect URI for logout');
+            }
+            $port = isset($redirect['port']) ? ':' . (int) $redirect['port'] : '';
+            $postLogout = $redirect['scheme'] . '://' . $redirect['host'] . $port . $this->safeReturnTo($returnTo);
+        }
+        $query = http_build_query(array(
+            'client_id' => $this->clientId,
+            'post_logout_redirect_uri' => $postLogout,
+        ), '', '&', PHP_QUERY_RFC3986);
+        header('Location: ' . $discovery['end_session_endpoint'] . '?' . $query, true, 303);
         exit;
     }
 

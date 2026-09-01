@@ -17,7 +17,7 @@
 
 ## 管理员登记应用
 
-打开 `http://210.47.163.114/enterprise-sso/admin/applications`，在“新建应用”中完成登记；创建后进入应用详情配置回调地址、启停状态、准入规则、密钥轮换和快捷注册。CLI 只作为批量自动化或应急方式。
+打开 `http://210.47.163.114/enterprise-sso/admin/applications/new`，按四步向导完成登记、代码复制、连通检测和真实登录/注销验收；完成后再进入服务详情维护回调、准入规则、密钥和快捷注册。CLI 只作为批量自动化或应急方式。
 
 登记时需要：
 
@@ -36,6 +36,7 @@
 4. 校验签名、`iss`、`aud`、过期时间和 nonce。
 5. 使用 `sub` 作为本地永久人员主键。
 6. 建立应用自己的 Session，并继续执行本应用的业务权限检查。
+7. 退出时先清理应用 Session，再跳转 Discovery 的 `end_session_endpoint`，最后回到登记的退出返回地址。
 
 不要用姓名、账号、部门或职务作为人员主键；这些字段都会变化。
 
@@ -59,5 +60,7 @@ PHP 7.4 项目优先使用仓库自带 SDK，参见 [QUICKSTART_PHP.md](QUICKSTA
 - 证书验证开启；
 - `state` 和 PKCE 验证开启；
 - 禁用应用后，现有 SSO 会话也不能进入；
-- 退出只清理本应用 Session，不泄露令牌；
+- `health.php` 的 Client ID 和 HMAC 签名通过认证中心检查；
+- `test-login.php` 完成一次真实密码或企业微信认证并返回向导；
+- `test-logout.php` 清理本地与统一认证会话并返回向导；
 - 日志不记录授权码、令牌、密钥和完整 Cookie。

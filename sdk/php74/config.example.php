@@ -5,6 +5,7 @@ return array(
     'client_id' => 'replace-with-issued-client-id',
     'client_secret' => 'replace-with-issued-client-secret',
     'redirect_uri' => 'https://your-app.example.internal/sso/callback.php',
+    'post_logout_redirect_uri' => 'https://your-app.example.internal/',
     'local_idle_seconds' => 7200,
     'local_absolute_seconds' => 28800,
     'ca_file' => '/etc/enterprise-sso/tls/ca.crt',

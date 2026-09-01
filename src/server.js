@@ -22,12 +22,15 @@ import {
 } from './repositories/wecom-transactions.js';
 import { buildWecomAuthorizeUrl, resolveWecomUser } from './services/wecom.js';
 import { activateScheduledTerms } from './services/terms.js';
+import { ensureSystemAdminClient } from './services/system-admin-client.js';
+import { runDueApplicationChecks } from './services/application-monitor.js';
 import { loginPage, messagePage, qrPage } from './views/html.js';
 import { adminRouter } from './admin/router.js';
 import { provisioningRouter } from './provisioning/router.js';
 import { publicUrl } from './public-url.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+await ensureSystemAdminClient();
 const provider = await createProvider();
 const app = express();
 const router = express.Router();
@@ -213,7 +216,7 @@ router.post('/interaction/:uid/wecom/start', noStore, loginLimiter, formBody, as
       return res.status(400).type('html').send(messagePage('请求已失效', '请返回登录页面后重新尝试。'));
     }
     const transaction = await createWecomTransaction(details.uid);
-    const mobileUrl = new URL(`${config.issuer}/wecom/mobile`);
+    const mobileUrl = new URL(config.wecom.qrEntryUrl || `${config.issuer}/wecom/mobile`);
     mobileUrl.searchParams.set('transaction_id', transaction.id);
     mobileUrl.searchParams.set('state', transaction.oauthState);
     const qrSvg = await QRCode.toString(mobileUrl.toString(), { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
@@ -321,10 +324,15 @@ const termActivationTimer = setInterval(() => {
   activateScheduledTerms().catch((error) => console.error('scheduled term activation failed', { message: error.message }));
 }, 30_000);
 termActivationTimer.unref();
+const applicationMonitorTimer = setInterval(() => {
+  runDueApplicationChecks().catch((error) => console.error('application connectivity monitor failed', { message: error.message }));
+}, 30_000);
+applicationMonitorTimer.unref();
 
 async function shutdown(signal) {
   console.log(`received ${signal}, shutting down`);
   clearInterval(termActivationTimer);
+  clearInterval(applicationMonitorTimer);
   server.close(async () => {
     await pool.end();
     process.exit(0);

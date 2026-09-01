@@ -52,6 +52,7 @@ export const config = Object.freeze({
     userinfoBridgeUrl: process.env.WECOM_USERINFO_BRIDGE_URL ?? '',
     userinfoBridgeToken: process.env.WECOM_USERINFO_BRIDGE_TOKEN ?? '',
     callbackUrl: process.env.WECOM_CALLBACK_URL ?? '',
+    qrEntryUrl: process.env.WECOM_QR_ENTRY_URL ?? '',
     scope: process.env.WECOM_OAUTH_SCOPE ?? 'snsapi_base',
     enabled: Boolean(
       process.env.WECOM_CORP_ID
@@ -78,6 +79,9 @@ if (config.production) {
   if (config.oidcStorageKey.length < 32) throw new Error('Production OIDC_STORAGE_KEY must be at least 32 characters');
   if (config.wecom.userinfoBridgeUrl && config.wecom.userinfoBridgeToken.length < 32) {
     throw new Error('WECOM_USERINFO_BRIDGE_TOKEN must be at least 32 characters');
+  }
+  if (config.wecom.qrEntryUrl && !config.wecom.qrEntryUrl.startsWith('https://')) {
+    throw new Error('WECOM_QR_ENTRY_URL must use HTTPS in production');
   }
 }
 

@@ -55,7 +55,7 @@ Redirect the browser to `registration_url`. It expires after 15 minutes and is s
 2. Redirect to the discovered authorization endpoint.
 3. At callback, compare `state`, exchange the code with the verifier, validate the ID token, and create the local session keyed by `sub`.
 4. Protect private routes with the local session. Redirect to OIDC when missing or when a permission refresh is required.
-5. Clear the local session at logout, then redirect through the discovered end-session endpoint.
+5. Clear the local session at logout, then redirect through the discovered end-session endpoint with the registered post-logout redirect URI.
 
 ## Acceptance checks
 
@@ -66,3 +66,4 @@ Redirect the browser to `registration_url`. It expires after 15 minutes and is s
 - Disabling the person, account, app, or rule prevents a fresh authorization.
 - Callback rejects wrong `state`, nonce, issuer, audience, expired tokens, and an unregistered redirect URI.
 - Quick registration exposes no password or client secret in browser URLs or logs.
+- The wizard's signed connectivity probe, real hosted-login test, and RP-initiated logout test all pass.

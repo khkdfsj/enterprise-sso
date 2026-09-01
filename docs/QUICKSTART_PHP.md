@@ -4,7 +4,7 @@
 
 ## 接入步骤
 
-1. 管理员打开 `http://210.47.163.114/enterprise-sso/admin/applications`，登记应用名称和精确回调地址，取得 `client_id` 与只显示一次的 `client_secret`。
+1. 管理员打开 `http://210.47.163.114/enterprise-sso/admin/applications/new`，登记业务首页、登录回调、退出返回和检测地址，取得 `client_id` 与只显示一次的 `client_secret`。
    认证中心地址固定为 `http://210.47.163.114/enterprise-sso`。本企业仅在受控校园网中启用 HTTP 例外，SDK 配置必须同时设置 `allow_insecure_http=true` 与 `local_cookie_secure=false`。
 2. 将 `sdk/php74` 复制到应用的不可公开浏览目录，把 `config.example.php` 复制为 `config.php` 并填写认证中心签发的配置。为每个应用设置不同的 `session_name`，并把 `session_path` 限制到该应用目录。
 3. 将 `callback.php` 暴露在登记的回调地址；其余 SDK 文件不得作为下载文件提供。
@@ -15,6 +15,8 @@
    ```
 
 5. 当前人员信息直接读取 `$ssoUser`，稳定人员标识为 `$ssoUser['sub']`。不要使用姓名、职务或部门作为主键。
+6. 使用向导生成的 `logout.php`。它先清理业务系统的本地 Session，再调用 Discovery 的统一注销端点。
+7. 部署向导生成的 `health.php`、`test-login.php` 和 `test-logout.php`，回到向导完成连通、认证和注销三项测试。
 
 ## 应用获得的资料
 

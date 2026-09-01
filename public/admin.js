@@ -1,5 +1,12 @@
 (() => {
   document.addEventListener('click', async (event) => {
+    const tabButton = event.target.closest('[data-tabs] [data-tab]');
+    if (tabButton) {
+      const root = tabButton.closest('[data-tabs]');
+      root.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button === tabButton));
+      root.querySelectorAll('[data-tab-panel]').forEach((panel) => { panel.hidden = panel.dataset.tabPanel !== tabButton.dataset.tab; });
+      return;
+    }
     const button = event.target.closest('[data-copy]');
     if (!button) return;
     const target = document.querySelector(button.dataset.copy);

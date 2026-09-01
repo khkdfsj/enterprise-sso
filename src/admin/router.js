@@ -1,12 +1,12 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import express from 'express';
-import { rateLimit } from 'express-rate-limit';
 import { config } from '../config.js';
 import { pool, withTransaction } from '../db.js';
-import { authenticatePassword } from '../repositories/accounts.js';
 import { audit } from '../repositories/audit.js';
 import { decryptJson, encryptJson, randomToken, sha256 } from '../security/crypto.js';
 import { hashPassword } from '../security/password.js';
+import { checkApplicationConnectivity } from '../services/application-monitor.js';
+import { ADMIN_CLIENT_ID, adminCallbackUrl, adminClientSecret, adminLoggedOutUrl } from '../services/system-admin-client.js';
 import { publishTerm } from '../services/terms.js';
 import { startTurnover } from '../services/turnover.js';
 import { publicUrl } from '../public-url.js';
@@ -14,30 +14,42 @@ import { publicUrl } from '../public-url.js';
 const router = express.Router();
 const body = express.urlencoded({ extended: false, limit: '32kb' });
 const ttlMs = 2 * 60 * 60 * 1000;
-const adminLoginLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 function sign(value) { return createHmac('sha256', config.cookieKeys[0]).update(value).digest('base64url'); }
-function makeSession(personId) {
-  const payload = Buffer.from(JSON.stringify({ personId, csrf: randomBytes(24).toString('base64url'), expires: Date.now() + ttlMs })).toString('base64url');
+function signedPayload(data) {
+  const payload = Buffer.from(JSON.stringify(data)).toString('base64url');
   return `${payload}.${sign(payload)}`;
 }
-function readSession(req) {
-  const raw = String(req.headers.cookie ?? '').split(';').map((v) => v.trim()).find((v) => v.startsWith('enterprise_admin='))?.slice(17);
+function readSignedPayload(raw) {
   if (!raw) return null;
   const [payload, signature] = raw.split('.');
   if (!payload || !signature) return null;
   const expected = sign(payload);
   if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
-  try {
-    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return session.expires > Date.now() ? session : null;
-  } catch { return null; }
+  try { return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { return null; }
+}
+function readCookie(req, name) {
+  return String(req.headers.cookie ?? '').split(';').map((v) => v.trim())
+    .find((v) => v.startsWith(`${name}=`))?.slice(name.length + 1) ?? '';
+}
+function makeSession(personId) {
+  return signedPayload({ personId, csrf: randomBytes(24).toString('base64url'), expires: Date.now() + ttlMs });
+}
+function readSession(req) {
+  const session = readSignedPayload(readCookie(req, 'enterprise_admin'));
+  return session?.expires > Date.now() ? session : null;
 }
 function cookie(value, maxAge = 7200) {
   return `enterprise_admin=${value}; Path=${publicUrl('/admin')}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
+}
+function flowCookie(value, maxAge = 600) {
+  return `enterprise_admin_flow=${value}; Path=${publicUrl('/admin')}; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
+}
+function localEndpoint(path) {
+  return `http://127.0.0.1:${config.port}${config.publicBasePath}${path}`;
 }
 async function requireAdmin(req, res, next) {
   const session = readSession(req);
@@ -67,15 +79,28 @@ function forbidUnless(req, res, roles) {
 function loginPage(title, content) {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)}</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-login-page"><main class="admin-login"><div class="admin-brand"><span>ID</span><strong>统一认证控制台</strong></div><section class="login-box"><h1>${esc(title)}</h1>${content}</section></main></body></html>`;
 }
-const navItems = [
-  ['overview', '/admin', '概览', '⌂'], ['applications', '/admin/applications', '应用接入', '▦'],
-  ['people', '/admin/people', '人员与账号', '♙'], ['terms', '/admin/terms', '届次换届', '↻'],
-  ['audit', '/admin/audit', '登录与审计', '≡'], ['integration', '/admin/integration', '接入指南', '⌘'],
+const navGroups = [
+  ['接入服务管理', [
+    ['applications', '/admin/applications', '服务纵览'],
+    ['application-new', '/admin/applications/new', '新增接入服务'],
+    ['monitoring', '/admin/monitoring', '连通与监控'],
+  ]],
+  ['部门人员管理', [
+    ['people', '/admin/people', '人员与账号'],
+    ['organization', '/admin/organization', '部门与职位'],
+    ['terms', '/admin/terms', '届次换届'],
+  ]],
+  ['系统管理', [
+    ['overview', '/admin', '系统概览'],
+    ['sessions', '/admin/sessions', '登录会话'],
+    ['audit', '/admin/audit', '审计日志'],
+    ['integration', '/admin/integration', '接入文档'],
+  ]],
 ];
 function adminPage(req, title, active, content, subtitle = '') {
   const csrf = esc(req.admin.csrf);
-  const nav = navItems.map(([key, href, label, icon]) => `<a class="nav-item ${active === key ? 'active' : ''}" href="${publicUrl(href)}"><span>${icon}</span>${label}</a>`).join('');
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)} · 统一认证</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-page"><aside class="sidebar"><a class="console-brand" href="${publicUrl('/admin')}"><span>ID</span><div>统一认证<small>管理控制台</small></div></a><nav>${nav}</nav><div class="sidebar-foot"><div><strong>${esc(req.admin.person.display_name)}</strong><small>${esc(req.admin.person.id)}</small></div><form method="post" action="${publicUrl('/admin/logout')}"><input type="hidden" name="csrf" value="${csrf}"><button class="link-button">退出</button></form></div></aside><div class="workspace"><header class="topbar"><div><h1>${esc(title)}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</div><span class="env-badge">生产环境</span></header><main class="content">${content}</main></div><script src="${publicUrl('/assets/admin.js')}" defer></script></body></html>`;
+  const nav = navGroups.map(([group, items]) => `<div class="nav-section"><div class="nav-title">${esc(group)}</div>${items.map(([key, href, label]) => `<a class="nav-item ${active === key ? 'active' : ''}" href="${publicUrl(href)}">${esc(label)}</a>`).join('')}</div>`).join('');
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)} · 统一认证</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-page"><aside class="sidebar"><a class="console-brand" href="${publicUrl('/admin')}"><span>ID</span><div>统一认证<small>管理控制台</small></div></a><nav>${nav}</nav><div class="sidebar-foot"><div><strong>${esc(req.admin.person.display_name)}</strong><small>${esc(req.admin.person.id)}</small></div><form method="post" action="${publicUrl('/admin/logout')}"><input type="hidden" name="csrf" value="${csrf}"><button class="link-button">退出全部系统</button></form></div></aside><div class="workspace"><header class="topbar"><div><h1>${esc(title)}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</div><span class="env-badge">生产环境</span></header><main class="content">${content}</main></div><script src="${publicUrl('/assets/admin.js')}" defer></script></body></html>`;
 }
 function csrf(req) { return `<input type="hidden" name="csrf" value="${esc(req.admin.csrf)}">`; }
 function badge(value, tone = '') { return `<span class="badge ${tone}">${esc(value)}</span>`; }
@@ -102,39 +127,116 @@ async function updateClient(connection, clientId, transform) {
 function secretResult(req, title, application, secret, extra = '') {
   return adminPage(req, title, 'applications', `<div class="notice success-notice"><strong>操作成功</strong><p>客户端密钥只显示这一次。请立即写入业务系统的安全配置，不要放入 GitHub。</p></div><section class="card"><div class="detail-list"><div><span>应用</span><strong>${esc(application.name)}</strong></div><div><span>Client ID</span><code>${esc(application.client_id)}</code></div><div><span>Client Secret</span><div class="secret-row"><code class="secret" id="one-time-secret">${esc(secret)}</code><button class="button secondary small" type="button" data-copy="#one-time-secret">复制</button></div></div>${extra}</div><div class="card-actions"><a class="button primary" href="${publicUrl(`/admin/applications/${encodeURIComponent(application.id)}`)}">进入应用配置</a></div></section>`);
 }
+function validateRelatedUrl(value, redirectUri, label, required = true) {
+  const raw = String(value ?? '').trim();
+  if (!raw && !required) return null;
+  const url = validateRedirectUri(raw);
+  const redirect = new URL(redirectUri);
+  const parsed = new URL(url);
+  if (parsed.host !== redirect.host) throw new Error(`${label}必须与登录回调使用同一主机`);
+  return url;
+}
+function codeBlock(id, title, code) {
+  return `<div class="code-block"><div class="code-head"><strong>${esc(title)}</strong><button type="button" class="button ghost small" data-copy="#${esc(id)}">复制代码</button></div><pre id="${esc(id)}"><code>${esc(code)}</code></pre></div>`;
+}
+function wizardSteps(current) {
+  return `<ol class="wizard-steps">${['登记网站', '复制接入代码', '连通检测', '完成验收'].map((label, index) => `<li class="${index + 1 < current ? 'done' : index + 1 === current ? 'current' : ''}"><span>${index + 1}</span><strong>${label}</strong></li>`).join('')}</ol>`;
+}
+function onboardingCode(app, secret, redirectUri, logoutUri, healthUri) {
+  const verifyLoginUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-login`;
+  const verifyLogoutUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-logout`;
+  const configCode = `<?php\nreturn array(\n  'issuer' => '${config.issuer}',\n  'client_id' => '${app.client_id}',\n  'client_secret' => '${secret}',\n  'redirect_uri' => '${redirectUri}',\n  'post_logout_redirect_uri' => '${logoutUri}',\n  'allow_insecure_http' => true,\n  'local_cookie_secure' => false,\n  'session_name' => '${app.client_id.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 48).toUpperCase()}_SID',\n  'session_path' => '${new URL(redirectUri).pathname.replace(/\/[^/]*$/, '/')}',\n);`;
+  const guard = `<?php\nrequire_once __DIR__ . '/sso/guard.php';\n// 登录成功后的人员信息：$ssoUser['sub']、$ssoUser['name']、department、position`;
+  const callback = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->handleCallback();`;
+  const logout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/'); // 同时退出本应用和统一认证`;
+  const health = `<?php\n$config = require __DIR__ . '/config.php';\nheader('Content-Type: application/json; charset=UTF-8');\necho json_encode([\n  'ok' => true,\n  'client_id' => $config['client_id'],\n  'signature' => hash_hmac('sha256', 'enterprise-sso-connectivity-v1', $config['client_secret']),\n]);\n// 检测地址：${healthUri}`;
+  const testLogin = `<?php\n$config = require __DIR__ . '/config.php';\nrequire __DIR__ . '/guard.php';\n$ts = time();\n$payload = 'login|' . $ssoUser['sub'] . '|' . $ts;\n$proof = hash_hmac('sha256', $payload, $config['client_secret']);\nheader('Location: ${verifyLoginUrl}?' . http_build_query([\n  'sub' => $ssoUser['sub'], 'ts' => $ts, 'proof' => $proof,\n]));\nexit;`;
+  const testLogout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/', '${verifyLogoutUrl}');`;
+  return { configCode, guard, callback, logout, health, testLogin, testLogout };
+}
 
-router.get('/login', (_req, res) => res.send(loginPage('管理员登录', `<p class="login-subtitle">使用具有管理权限的统一认证账号</p><form method="post" class="stack-form"><label>UserID<input name="username" autocomplete="username" placeholder="学号或工号" required></label><label>密码<input type="password" name="password" autocomplete="current-password" placeholder="请输入密码" required></label><button class="button primary">登录控制台</button></form>`)));
-router.post('/login', adminLoginLimit, body, async (req, res) => {
-  const result = await authenticatePassword(req.body.username, req.body.password);
-  if (!result.ok) return res.status(401).send(loginPage('登录失败', '<div class="notice danger">账号或密码错误，或账号当前不可用。</div><a class="button secondary full" href="' + publicUrl('/admin/login') + '">返回登录</a>'));
-  const [roles] = await pool.execute("SELECT role FROM system_role_assignments WHERE person_id=? AND status='active'", [result.personId]);
-  if (!roles.length) return res.status(403).send(loginPage('无权访问', '<p class="form-note">此账号没有后台管理权限。</p>'));
-  res.setHeader('Set-Cookie', cookie(makeSession(result.personId)));
-  res.redirect(publicUrl('/admin'));
+router.get('/login', (req, res) => {
+  if (readSession(req)) return res.redirect(publicUrl('/admin'));
+  const state = randomToken(32);
+  const nonce = randomToken(32);
+  const verifier = randomToken(48);
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const flow = signedPayload({ state, nonce, verifier, expires: Date.now() + 10 * 60_000 });
+  const url = new URL(`${config.issuer}/auth`);
+  url.search = new URLSearchParams({
+    client_id: ADMIN_CLIENT_ID,
+    redirect_uri: adminCallbackUrl(),
+    response_type: 'code',
+    scope: 'openid profile enterprise',
+    state,
+    nonce,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  }).toString();
+  res.setHeader('Set-Cookie', flowCookie(flow));
+  return res.redirect(url.toString());
 });
-router.post('/logout', requireAdmin, body, requireCsrf, (req, res) => { res.setHeader('Set-Cookie', cookie('', 0)); res.redirect(publicUrl('/admin/login')); });
+router.get('/callback', async (req, res, next) => {
+  try {
+    const flow = readSignedPayload(readCookie(req, 'enterprise_admin_flow'));
+    const returnedState = String(req.query.state ?? '');
+    const expectedState = String(flow?.state ?? '');
+    if (!flow || flow.expires <= Date.now() || returnedState.length !== expectedState.length || !timingSafeEqual(Buffer.from(returnedState), Buffer.from(expectedState))) {
+      return res.status(400).send(loginPage('登录请求已失效', `<a class="button primary full" href="${publicUrl('/admin/login')}">重新登录</a>`));
+    }
+    if (!req.query.code || req.query.error) throw new Error('统一认证未返回有效授权码');
+    const tokenResponse = await fetch(localEndpoint('/token'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: adminCallbackUrl(), client_id: ADMIN_CLIENT_ID, client_secret: adminClientSecret(), code_verifier: flow.verifier }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!tokenResponse.ok) throw new Error('统一认证令牌交换失败');
+    const token = await tokenResponse.json();
+    const userResponse = await fetch(localEndpoint('/me'), { headers: { authorization: `Bearer ${token.access_token}` }, signal: AbortSignal.timeout(5000) });
+    if (!userResponse.ok) throw new Error('统一认证身份读取失败');
+    const user = await userResponse.json();
+    const [roles] = await pool.execute("SELECT role FROM system_role_assignments WHERE person_id=? AND status='active'", [user.sub]);
+    if (!roles.length) return res.status(403).send(loginPage('无权访问', '<p class="form-note">此账号已完成统一认证，但没有后台管理权限。</p>'));
+    res.setHeader('Set-Cookie', [cookie(makeSession(user.sub)), flowCookie('', 0)]);
+    await audit(req, 'admin_oidc_login', 'success', { actorPersonId: user.sub, targetType: 'application', targetId: ADMIN_CLIENT_ID });
+    return res.redirect(publicUrl('/admin'));
+  } catch (error) { return next(error); }
+});
+router.get('/logged-out', (_req, res) => res.send(loginPage('已安全退出', `<p class="login-subtitle">业务后台会话和统一认证会话均已结束。</p><a class="button primary full" href="${publicUrl('/admin/login')}">重新登录</a>`)));
+router.post('/logout', requireAdmin, body, requireCsrf, (req, res) => {
+  const url = new URL(`${config.issuer}/session/end`);
+  url.search = new URLSearchParams({ client_id: ADMIN_CLIENT_ID, post_logout_redirect_uri: adminLoggedOutUrl() }).toString();
+  res.setHeader('Set-Cookie', cookie('', 0));
+  res.redirect(303, url.toString());
+});
 
 router.get('/', requireAdmin, async (req, res) => {
   const [[people], [apps], [events], [sessions], [recentApps], [recentEvents]] = await Promise.all([
     pool.execute("SELECT COUNT(*) total,SUM(status IN ('active','probation')) available,SUM(permanent_member=1) permanent FROM people"),
-    pool.execute("SELECT COUNT(*) total,SUM(status='active') active,SUM(provisioning_enabled=1) provisioning FROM applications"),
+    pool.execute("SELECT COUNT(*) total,SUM(status='active') active,SUM(provisioning_enabled=1) provisioning FROM applications WHERE client_id<>?", [ADMIN_CLIENT_ID]),
     pool.execute("SELECT COUNT(*) total,SUM(result='failure') failures FROM audit_logs WHERE created_at>=datetime('now','-24 hours')"),
     pool.execute("SELECT COUNT(*) total FROM oidc_objects WHERE model='Session' AND (expires_at IS NULL OR expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))"),
-    pool.execute('SELECT id,client_id,name,access_mode,status,updated_at FROM applications ORDER BY updated_at DESC LIMIT 5'),
+    pool.execute('SELECT id,client_id,name,access_mode,status,updated_at FROM applications WHERE client_id<>? ORDER BY updated_at DESC LIMIT 5', [ADMIN_CLIENT_ID]),
     pool.execute('SELECT event_type,result,actor_person_id,target_id,created_at FROM audit_logs ORDER BY id DESC LIMIT 8'),
   ]);
   const p = people[0] ?? {}; const a = apps[0] ?? {}; const e = events[0] ?? {}; const s = sessions[0] ?? {};
-  const cards = [[a.active ?? 0, '启用应用', 'applications'], [p.available ?? 0, '可登录人员', 'people'], [s.total ?? 0, '有效会话', 'audit'], [e.total ?? 0, '24 小时认证事件', 'audit']].map(([value, label, link]) => `<a class="stat-card" href="${publicUrl(`/admin/${link}`)}"><span>${label}</span><strong>${value}</strong><small>查看详情 →</small></a>`).join('');
+  const metrics = [[a.active ?? 0, '启用服务', 'applications'], [p.available ?? 0, '可登录人员', 'people'], [s.total ?? 0, '有效会话', 'sessions'], [e.total ?? 0, '24 小时事件', 'audit']].map(([value, label, link]) => `<a href="${publicUrl(`/admin/${link}`)}"><span>${label}</span><strong>${value}</strong></a>`).join('');
   const appRows = recentApps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : '按规则授权'}</td><td>${statusBadge(app.status)}</td><td>${formatTime(app.updated_at)}</td></tr>`).join('');
   const eventRows = recentEvents.map((event) => `<tr><td>${esc(event.event_type)}</td><td>${esc(event.actor_person_id ?? '系统')}</td><td>${badge(event.result, event.result === 'success' ? 'success' : event.result === 'failure' ? 'danger' : 'warning')}</td><td>${formatTime(event.created_at)}</td></tr>`).join('');
-  res.send(adminPage(req, '系统概览', 'overview', `<div class="stats-grid">${cards}</div><div class="two-column"><section class="card"><div class="card-header"><div><h2>最近应用</h2><p>统一认证接入状态</p></div><a class="button secondary small" href="${publicUrl('/admin/applications')}">管理应用</a></div><div class="table-wrap"><table><thead><tr><th>应用</th><th>访问策略</th><th>状态</th><th>更新</th></tr></thead><tbody>${appRows || '<tr><td colspan="4" class="empty-cell">暂无应用</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-header"><div><h2>最近认证事件</h2><p>成功、失败与拒绝记录</p></div><a class="button secondary small" href="${publicUrl('/admin/audit')}">查看审计</a></div><div class="table-wrap"><table><thead><tr><th>事件</th><th>主体</th><th>结果</th><th>时间</th></tr></thead><tbody>${eventRows || '<tr><td colspan="4" class="empty-cell">暂无事件</td></tr>'}</tbody></table></div></section></div><section class="card quick-start"><div><h2>接入新业务系统</h2><p>创建应用后获得 Client ID 和一次性 Client Secret，再配置精确回调地址与访问范围。</p></div><a class="button primary" href="${publicUrl('/admin/applications#new-application')}">新建接入应用</a></section>`, '认证、应用与人员状态集中查看'));
+  res.send(adminPage(req, '系统概览', 'overview', `<div class="metric-strip">${metrics}</div><div class="dashboard-actions"><a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a><a class="button secondary" href="${publicUrl('/admin/people')}">管理人员</a><a class="button secondary" href="${publicUrl('/admin/sessions')}">查看会话</a></div><div class="split-tables"><section class="table-panel"><div class="page-actions"><div><h2>最近服务</h2><p>统一认证接入状态</p></div><a class="button ghost small" href="${publicUrl('/admin/applications')}">全部服务</a></div><div class="table-wrap"><table><thead><tr><th>应用</th><th>访问策略</th><th>状态</th><th>更新</th></tr></thead><tbody>${appRows || '<tr><td colspan="4" class="empty-cell">暂无应用</td></tr>'}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>最近认证事件</h2><p>成功、失败与拒绝记录</p></div><a class="button ghost small" href="${publicUrl('/admin/audit')}">全部日志</a></div><div class="table-wrap"><table><thead><tr><th>事件</th><th>主体</th><th>结果</th><th>时间</th></tr></thead><tbody>${eventRows || '<tr><td colspan="4" class="empty-cell">暂无事件</td></tr>'}</tbody></table></div></section></div>`, '认证、服务与人员运行状态'));
 });
 
 router.get('/applications', requireAdmin, async (req, res) => {
-  const [apps] = await pool.execute(`SELECT a.*,COUNT(DISTINCT r.id) redirect_count,COUNT(DISTINCT ar.id) rule_count FROM applications a LEFT JOIN application_redirect_uris r ON r.application_id=a.id LEFT JOIN application_access_rules ar ON ar.application_id=a.id GROUP BY a.id ORDER BY a.name`);
-  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.redirect_count}</td><td>${app.provisioning_enabled ? badge('已启用', 'success') : badge('未启用', 'muted')}</td><td>${statusBadge(app.status)}</td><td><a class="button secondary small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">配置</a></td></tr>`).join('');
-  const create = hasRole(req, ['super_admin', 'application_admin']) ? `<section class="card" id="new-application"><div class="card-header"><div><h2>新建接入应用</h2><p>同时创建 OIDC 客户端并生成一次性密钥</p></div></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>应用名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">登录回调地址<input name="redirect_uri" type="url" placeholder="http://210.47.163.114/path/sso/callback.php" required></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">创建应用并生成密钥</button></div></form></section>` : '';
-  res.send(adminPage(req, '应用接入', 'applications', `<section class="card"><div class="card-header"><div><h2>已接入应用</h2><p>管理 OIDC 客户端、回调地址、访问范围和快捷注册</p></div><span class="count">${apps.length} 个应用</span></div><div class="table-wrap"><table><thead><tr><th>应用</th><th>访问范围</th><th>回调</th><th>快捷注册</th><th>状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">尚未接入应用</td></tr>'}</tbody></table></div></section>${create}`, '认证平台的核心接入配置'));
+  const [apps] = await pool.execute(`SELECT a.*,COUNT(DISTINCT r.id) redirect_count,COUNT(DISTINCT ar.id) rule_count FROM applications a LEFT JOIN application_redirect_uris r ON r.application_id=a.id LEFT JOIN application_access_rules ar ON ar.application_id=a.id WHERE a.client_id<>? GROUP BY a.id ORDER BY a.name`, [ADMIN_CLIENT_ID]);
+  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.home_url ? `<a href="${esc(app.home_url)}" target="_blank" rel="noopener">打开网站</a>` : '—'}</td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('异常', 'danger') : badge('未检测', 'muted')}</td><td>${statusBadge(app.status)}</td><td><div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">管理</a><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/onboarding?step=3`)}">测试</a></div></td></tr>`).join('');
+  const addButton = hasRole(req, ['super_admin', 'application_admin']) ? `<a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a>` : '';
+  res.send(adminPage(req, '服务纵览', 'applications', `<section class="table-panel"><div class="page-actions"><div><h2>接入服务</h2><p>集中管理网站、认证端点、权限与连通状态</p></div>${addButton}</div><div class="table-wrap"><table><thead><tr><th>服务</th><th>访问范围</th><th>业务入口</th><th>连通状态</th><th>启用状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">尚未接入服务</td></tr>'}</tbody></table></div></section>`, '表格纵览与集中操作'));
+});
+
+router.get('/applications/new', requireAdmin, (req, res) => {
+  if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+  res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记网站信息</h2><p>一次填写业务入口、登录回调、退出返回和连通检测地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">业务系统首页<input name="home_url" type="url" placeholder="http://210.47.163.114/path/" required></label><label class="span-2">登录回调地址<input name="redirect_uri" type="url" placeholder="http://210.47.163.114/path/sso/callback.php" required></label><label class="span-2">退出后返回地址<input name="logout_redirect_uri" type="url" placeholder="http://210.47.163.114/path/" required></label><label class="span-2">连通检测地址<input name="health_check_url" type="url" placeholder="http://210.47.163.114/path/sso/health.php" required></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">保存并生成接入代码</button></div></form></section>`, '向导会连续完成登记、代码、检测和验收'));
 });
 
 router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, next) => {
@@ -143,40 +245,118 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     const name = String(req.body.name ?? '').trim();
     const clientId = String(req.body.client_id ?? '').trim() || `app_${randomToken(12)}`;
     const redirectUri = validateRedirectUri(req.body.redirect_uri);
+    const homeUrl = validateRelatedUrl(req.body.home_url, redirectUri, '业务系统首页');
+    const logoutUri = validateRelatedUrl(req.body.logout_redirect_uri, redirectUri, '退出后返回地址');
+    const healthUri = validateRelatedUrl(req.body.health_check_url, redirectUri, '连通检测地址');
     const accessMode = req.body.access_mode === 'all_active' ? 'all_active' : 'rules';
     if (!name || name.length > 180 || !/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('应用名称或 Client ID 格式不正确');
     const id = randomUUID(); const secret = randomToken(48); const hash = await hashPassword(secret); const now = new Date().toISOString();
-    const clientPayload = { client_id: clientId, client_secret: secret, client_name: name, redirect_uris: [redirectUri], response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256' };
+    const verificationLogoutUri = `${config.issuer}/admin/applications/${encodeURIComponent(id)}/verify-logout`;
+    const clientPayload = { client_id: clientId, client_secret: secret, client_name: name, redirect_uris: [redirectUri], post_logout_redirect_uris: [logoutUri, verificationLogoutUri], response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256' };
     await withTransaction(async (connection) => {
-      await connection.execute("INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',?,?)", [id, clientId, name, hash, accessMode, req.body.provisioning_enabled === '1' ? 1 : 0, now, now]);
+      await connection.execute("INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?)", [id, clientId, name, hash, accessMode, req.body.provisioning_enabled === '1' ? 1 : 0, homeUrl, healthUri, now, now]);
       await connection.execute('INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,?)', [id, redirectUri, now]);
       await connection.execute("INSERT INTO oidc_objects(model,id,payload,created_at,updated_at) VALUES ('Client',?,?,?,?)", [clientId, JSON.stringify(encryptJson(clientPayload)), now, now]);
     });
     await audit(req, 'application_create', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: clientId });
-    res.send(secretResult(req, '应用创建成功', { id, name, client_id: clientId }, secret, `<div><span>回调地址</span><code>${esc(redirectUri)}</code></div>`));
+    const app = { id, name, client_id: clientId };
+    const snippets = onboardingCode(app, secret, redirectUri, logoutUri, healthUri);
+    res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(2)}<section class="wizard-panel"><div class="wizard-heading"><span>第二步</span><h2>复制接入文件</h2><p>Client Secret 只在本页显示一次。把 SDK 放到业务系统后，按文件名复制；测试文件用于向导自动验收。</p></div><div class="credential-table"><div><span>Issuer</span><code id="wizard-issuer">${esc(config.issuer)}</code><button data-copy="#wizard-issuer" class="button ghost small">复制</button></div><div><span>Client ID</span><code id="wizard-client">${esc(clientId)}</code><button data-copy="#wizard-client" class="button ghost small">复制</button></div><div><span>Client Secret</span><code id="wizard-secret">${esc(secret)}</code><button data-copy="#wizard-secret" class="button ghost small">复制</button></div></div><div class="code-tabs" data-tabs><div class="tab-buttons"><button class="active" data-tab="config" type="button">config.php</button><button data-tab="guard" type="button">受保护页面</button><button data-tab="callback" type="button">callback.php</button><button data-tab="logout" type="button">logout.php</button><button data-tab="health" type="button">health.php</button><button data-tab="test-login" type="button">test-login.php</button><button data-tab="test-logout" type="button">test-logout.php</button></div><div data-tab-panel="config">${codeBlock('code-config', '配置文件', snippets.configCode)}</div><div data-tab-panel="guard" hidden>${codeBlock('code-guard', '业务页面第一行', snippets.guard)}</div><div data-tab-panel="callback" hidden>${codeBlock('code-callback', '登录回调', snippets.callback)}</div><div data-tab-panel="logout" hidden>${codeBlock('code-logout', '统一注销', snippets.logout)}</div><div data-tab-panel="health" hidden>${codeBlock('code-health', '基础连通与凭据验证', snippets.health)}</div><div data-tab-panel="test-login" hidden>${codeBlock('code-test-login', '真实登录认证测试', snippets.testLogin)}</div><div data-tab-panel="test-logout" hidden>${codeBlock('code-test-logout', '真实统一注销测试', snippets.testLogout)}</div></div><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(id)}/monitor/start`)}">${csrf(req)}<button class="button primary">我已复制，开始三项验收</button></form></section>`, '向导会持续检测十分钟并引导登录、注销验收'));
   } catch (error) { next(error); }
 });
 
-router.get('/applications/:id', requireAdmin, async (req, res) => {
-  const [[apps], [redirects], [rules], [departments], [positions]] = await Promise.all([
-    pool.execute('SELECT * FROM applications WHERE id=?', [req.params.id]), pool.execute('SELECT * FROM application_redirect_uris WHERE application_id=? ORDER BY id', [req.params.id]), pool.execute('SELECT * FROM application_access_rules WHERE application_id=? ORDER BY id DESC', [req.params.id]), pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"), pool.execute("SELECT id,name FROM positions WHERE status='active' ORDER BY rank_order DESC,name"),
+router.post('/applications/:id/monitor/start', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+    const until = new Date(Date.now() + 10 * 60_000).toISOString();
+    await pool.execute("UPDATE applications SET monitor_until=?,integration_status='testing',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [until, req.params.id]);
+    await checkApplicationConnectivity(req.params.id);
+    return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
+  } catch (error) { return next(error); }
+});
+router.post('/applications/:id/check', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+    await checkApplicationConnectivity(req.params.id);
+    const back = req.body.return_to === 'monitoring' ? '/admin/monitoring' : `/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`;
+    return res.redirect(publicUrl(back));
+  } catch (error) { return next(error); }
+});
+router.get('/applications/:id/verify-login', requireAdmin, async (req, res, next) => {
+  try {
+    const sub = String(req.query.sub ?? '');
+    const timestamp = Number(req.query.ts);
+    const proof = String(req.query.proof ?? '');
+    if (sub !== req.admin.person.id || !Number.isInteger(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > 300) throw new Error('登录测试凭据已失效');
+    const [clients] = await pool.execute("SELECT o.payload FROM applications a JOIN oidc_objects o ON o.model='Client' AND o.id=a.client_id WHERE a.id=?", [req.params.id]);
+    if (!clients[0]) throw new Error('接入服务不存在');
+    const client = decryptJson(JSON.parse(clients[0].payload));
+    const expected = createHmac('sha256', client.client_secret).update(`login|${sub}|${timestamp}`).digest('hex');
+    if (proof.length !== expected.length || !timingSafeEqual(Buffer.from(proof), Buffer.from(expected))) throw new Error('登录测试签名不正确');
+    await pool.execute("UPDATE applications SET auth_test_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [req.params.id]);
+    return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
+  } catch (error) { return next(error); }
+});
+router.get('/applications/:id/verify-logout', requireAdmin, async (req, res) => {
+  await pool.execute("UPDATE applications SET logout_test_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [req.params.id]);
+  return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
+});
+router.get('/applications/:id/onboarding', requireAdmin, async (req, res) => {
+  const [[apps], [checks]] = await Promise.all([
+    pool.execute("SELECT * FROM applications WHERE id=? AND client_id<>?", [req.params.id, ADMIN_CLIENT_ID]),
+    pool.execute('SELECT * FROM application_connectivity_checks WHERE application_id=? ORDER BY id DESC LIMIT 10', [req.params.id]),
   ]);
   const app = apps[0]; if (!app) return res.sendStatus(404);
+  const baseOk = app.last_check_status === 'success';
+  const authOk = Boolean(app.auth_test_at);
+  const logoutOk = Boolean(app.logout_test_at);
+  const success = baseOk && authOk && logoutOk;
+  const health = app.health_check_url ? new URL(app.health_check_url) : null;
+  const testLoginUrl = health ? new URL('test-login.php', health).toString() : '#';
+  const testLogoutUrl = health ? new URL('test-logout.php', health).toString() : '#';
+  const rows = checks.map((check) => `<tr><td>${formatTime(check.checked_at)}</td><td>${check.status === 'success' ? badge('连通', 'success') : badge('失败', 'danger')}</td><td>${check.http_status ?? '—'}</td><td>${check.response_ms} ms</td><td>${esc(check.message ?? '')}</td></tr>`).join('');
+  const next = success ? `<a class="button primary" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">完成并管理服务</a><a class="button secondary" href="${esc(app.home_url)}" target="_blank" rel="noopener">打开业务系统</a>` : !baseOk ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<button class="button primary">立即重新检测基础连通</button></form>` : !authOk ? `<a class="button primary" href="${esc(testLoginUrl)}">开始真实登录认证测试</a>` : `<a class="button primary" href="${esc(testLogoutUrl)}">开始统一注销测试</a>`;
+  const testRows = `<tr><td>基础连通与凭据</td><td>${baseOk ? badge('通过','success') : badge('待通过','warning')}</td><td>${esc(app.last_check_message ?? '等待检测')}</td></tr><tr><td>密码或企业微信认证</td><td>${authOk ? badge('通过','success') : badge('待测试','warning')}</td><td>${authOk ? formatTime(app.auth_test_at) : '访问 test-login.php 完成一次真实登录'}</td></tr><tr><td>统一注销与回跳</td><td>${logoutOk ? badge('通过','success') : badge('待测试','warning')}</td><td>${logoutOk ? formatTime(app.logout_test_at) : '访问 test-logout.php，确认回到本向导'}</td></tr>`;
+  res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(success ? 4 : 3)}<section class="wizard-panel"><div class="wizard-heading"><span>${success ? '第四步' : '第三步'}</span><h2>${success ? '接入验收全部通过' : '逐项完成接入验收'}</h2><p>${success ? '基础连通、真实认证和统一注销均已通过。' : '系统会自动检测基础连通；登录和注销需要点击按钮完成一次真实用户流程。'}</p></div><div class="table-wrap verification-table"><table><thead><tr><th>验收项目</th><th>状态</th><th>结果与操作说明</th></tr></thead><tbody>${testRows}</tbody></table></div><div class="wizard-actions">${next}</div><details class="check-history"><summary>查看基础连通检测历史</summary><div class="table-wrap"><table><thead><tr><th>检测时间</th><th>结果</th><th>HTTP</th><th>耗时</th><th>说明</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty-cell">等待首次检测</td></tr>'}</tbody></table></div></details></section>`, '认证、注销和连通性都提供代码与真实测试'));
+});
+
+router.get('/monitoring', requireAdmin, async (req, res) => {
+  const [apps] = await pool.execute("SELECT * FROM applications WHERE client_id<>? ORDER BY last_check_status,last_check_at DESC", [ADMIN_CLIENT_ID]);
+  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td><code>${esc(app.health_check_url ?? '未配置')}</code></td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('失败', 'danger') : badge('未检测', 'muted')}</td><td>${app.last_check_http_status ?? '—'}</td><td>${formatTime(app.last_check_at)}</td><td><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<input type="hidden" name="return_to" value="monitoring"><button class="button ghost small" ${app.health_check_url ? '' : 'disabled'}>立即检测</button></form></td></tr>`).join('');
+  res.send(adminPage(req, '连通与监控', 'monitoring', `<section class="table-panel"><div class="page-actions"><div><h2>服务连通状态</h2><p>接入向导启动后持续检测十分钟，历史结果保留用于排障。</p></div></div><div class="table-wrap"><table><thead><tr><th>服务</th><th>检测地址</th><th>状态</th><th>HTTP</th><th>最近检测</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无服务</td></tr>'}</tbody></table></div></section>`, '集中查看业务系统可达性'));
+});
+
+router.get('/applications/:id', requireAdmin, async (req, res) => {
+  const [[apps], [redirects], [rules], [departments], [positions], [clients], [checks]] = await Promise.all([
+    pool.execute('SELECT * FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]), pool.execute('SELECT * FROM application_redirect_uris WHERE application_id=? ORDER BY id', [req.params.id]), pool.execute('SELECT * FROM application_access_rules WHERE application_id=? ORDER BY id DESC', [req.params.id]), pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"), pool.execute("SELECT id,name FROM positions WHERE status='active' ORDER BY rank_order DESC,name"), pool.execute("SELECT payload FROM oidc_objects WHERE model='Client' AND id=(SELECT client_id FROM applications WHERE id=?)", [req.params.id]), pool.execute('SELECT * FROM application_connectivity_checks WHERE application_id=? ORDER BY id DESC LIMIT 20', [req.params.id]),
+  ]);
+  const app = apps[0]; if (!app) return res.sendStatus(404);
+  const client = clients[0] ? decryptJson(JSON.parse(clients[0].payload)) : {};
   const canEdit = hasRole(req, ['super_admin', 'application_admin']);
   const redirectRows = redirects.map((item) => `<li><code>${esc(item.redirect_uri)}</code>${canEdit && redirects.length > 1 ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/redirects/remove`)}">${csrf(req)}<input type="hidden" name="redirect_id" value="${item.id}"><button class="icon-button danger-text" title="移除">×</button></form>` : ''}</li>`).join('');
   const ruleRows = rules.map((rule) => `<tr><td>${rule.effect === 'allow' ? badge('允许', 'success') : badge('拒绝', 'danger')}</td><td>${{ person: '人员', department: '部门', position: '职位' }[rule.subject_type]}</td><td><code>${esc(rule.subject_id)}</code></td><td>${formatTime(rule.starts_at)} — ${formatTime(rule.ends_at)}</td><td>${canEdit ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/rules/remove`)}">${csrf(req)}<input type="hidden" name="rule_id" value="${rule.id}"><button class="button ghost small">移除</button></form>` : ''}</td></tr>`).join('');
   const subjectOptions = `<optgroup label="人员"><option value="person:">输入 UserID 后提交</option></optgroup><optgroup label="部门">${departments.map((d) => `<option value="department:${esc(d.id)}">${esc(d.name)}</option>`).join('')}</optgroup><optgroup label="职位">${positions.map((p) => `<option value="position:${esc(p.id)}">${esc(p.name)}</option>`).join('')}</optgroup>`;
-  const controls = canEdit ? `<div class="two-column"><section class="card"><div class="card-header"><div><h2>基本设置</h2><p>控制应用状态和访问模式</p></div></div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/settings`)}">${csrf(req)}<label>应用名称<input name="name" value="${esc(app.name)}" required></label><label>状态<select name="status"><option value="active" ${app.status === 'active' ? 'selected' : ''}>启用</option><option value="disabled" ${app.status === 'disabled' ? 'selected' : ''}>停用</option></select></label><label>访问范围<select name="access_mode"><option value="all_active" ${app.access_mode === 'all_active' ? 'selected' : ''}>全部有效人员</option><option value="rules" ${app.access_mode === 'rules' ? 'selected' : ''}>按规则授权</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1" ${app.provisioning_enabled ? 'checked' : ''}>允许快捷注册 API</label><div class="form-actions span-2"><button class="button primary">保存设置</button></div></form></section><section class="card"><div class="card-header"><div><h2>客户端密钥</h2><p>密钥不可查看，只能重新生成</p></div></div><div class="danger-zone"><p>轮换后旧密钥立即失效，需要同步更新业务系统配置。</p><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/rotate-secret`)}">${csrf(req)}<button class="button danger">轮换 Client Secret</button></form></div></section></div>` : '';
+  const basicSettings = canEdit ? `<section class="table-panel"><div class="page-actions"><div><h2>基本设置</h2><p>维护服务名称、入口、状态和访问模式。</p></div></div><form class="form-grid settings-form" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/settings`)}">${csrf(req)}<label>应用名称<input name="name" value="${esc(app.name)}" required></label><label>业务首页<input name="home_url" type="url" value="${esc(app.home_url ?? '')}" required></label><label>检测地址<input name="health_check_url" type="url" value="${esc(app.health_check_url ?? '')}" required></label><label>状态<select name="status"><option value="active" ${app.status === 'active' ? 'selected' : ''}>启用</option><option value="disabled" ${app.status === 'disabled' ? 'selected' : ''}>停用</option></select></label><label>访问范围<select name="access_mode"><option value="all_active" ${app.access_mode === 'all_active' ? 'selected' : ''}>全部有效人员</option><option value="rules" ${app.access_mode === 'rules' ? 'selected' : ''}>按规则授权</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1" ${app.provisioning_enabled ? 'checked' : ''}>允许快捷注册 API</label><div class="form-actions span-2"><button class="button primary">保存设置</button></div></form></section>` : '';
+  const secretSettings = canEdit ? `<section class="table-panel"><div class="page-actions"><div><h2>凭据与注册</h2><p>密钥不可查看，只能轮换；快捷注册不会接触用户密码。</p></div></div><div class="security-actions"><div><strong>Client Secret</strong><p>轮换后旧密钥立即失效，需要同步更新业务系统配置。</p><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/rotate-secret`)}">${csrf(req)}<button class="button danger">轮换密钥</button></form></div>${app.provisioning_enabled ? `<div><strong>快捷注册</strong><form class="form-grid compact-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/registration`)}">${csrf(req)}<label>UserID<input name="user_id" required></label><label>姓名<input name="display_name" required></label><div class="form-actions span-2"><button class="button secondary">生成一次性注册链接</button></div></form></div>` : '<div><strong>快捷注册</strong><p>当前未启用，可在基本设置中开启。</p></div>'}</div></section>` : '';
   const addRedirect = canEdit ? `<form class="inline-form" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/redirects`)}">${csrf(req)}<input name="redirect_uri" type="url" placeholder="新增精确回调地址" required><button class="button secondary">添加回调</button></form>` : '';
   const addRule = canEdit && app.access_mode === 'rules' ? `<form class="rule-form" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/rules`)}">${csrf(req)}<select name="effect"><option value="allow">允许</option><option value="deny">拒绝</option></select><select name="subject_choice">${subjectOptions}</select><input name="person_id" placeholder="选择人员时填写 UserID"><input type="datetime-local" name="starts_at"><input type="datetime-local" name="ends_at"><button class="button secondary">添加规则</button></form>` : '';
-  const registration = canEdit && app.provisioning_enabled ? `<section class="card"><div class="card-header"><div><h2>生成快捷注册链接</h2><p>15 分钟单次有效，密码只在统一认证中心设置</p></div></div><form class="form-grid compact-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/registration`)}">${csrf(req)}<label>UserID<input name="user_id" required></label><label>姓名<input name="display_name" required></label><div class="form-actions span-2"><button class="button secondary">生成一次性注册链接</button></div></form></section>` : '';
-  res.send(adminPage(req, app.name, 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">应用接入</a><span>/</span>${esc(app.name)}</div><section class="app-summary"><div><span class="app-avatar">${esc(app.name.slice(0, 1))}</span><div><h2>${esc(app.name)}</h2><code>${esc(app.client_id)}</code></div></div><div>${statusBadge(app.status)} ${app.access_mode === 'all_active' ? badge('全部有效人员') : badge('按规则授权', 'warning')}</div></section>${controls}<section class="card"><div class="card-header"><div><h2>登录回调地址</h2><p>仅允许精确匹配的 OIDC 回调</p></div><span class="count">${redirects.length} 个</span></div><ul class="uri-list">${redirectRows}</ul>${addRedirect}</section><section class="card"><div class="card-header"><div><h2>访问规则</h2><p>拒绝规则优先；按人员、部门或职位授权</p></div><span class="count">${rules.length} 条</span></div>${addRule}<div class="table-wrap"><table><thead><tr><th>效果</th><th>主体类型</th><th>主体</th><th>有效时间</th><th></th></tr></thead><tbody>${ruleRows || '<tr><td colspan="5" class="empty-cell">暂无规则；规则模式下，无允许规则即无法访问</td></tr>'}</tbody></table></div></section>${registration}`, `Client ID：${app.client_id}`));
+  const tab = ['overview', 'endpoints', 'access', 'security', 'monitor'].includes(String(req.query.tab)) ? String(req.query.tab) : 'overview';
+  const tabs = [['overview','概览'],['endpoints','登录与注销端点'],['access','访问权限'],['security','密钥与注册'],['monitor','连通监控']].map(([key,label]) => `<a class="${tab === key ? 'active' : ''}" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}?tab=${key}`)}">${label}</a>`).join('');
+  const checkRows = checks.map((check) => `<tr><td>${formatTime(check.checked_at)}</td><td>${check.status === 'success' ? badge('连通','success') : badge('失败','danger')}</td><td>${check.http_status ?? '—'}</td><td>${check.response_ms} ms</td><td>${esc(check.message ?? '')}</td></tr>`).join('');
+  const tabContent = {
+    overview: `${basicSettings}<section class="table-panel"><div class="summary-grid"><div><span>Client ID</span><code>${esc(app.client_id)}</code></div><div><span>业务入口</span><a href="${esc(app.home_url ?? '#')}" target="_blank" rel="noopener">${esc(app.home_url ?? '未配置')}</a></div><div><span>接入状态</span>${app.last_check_status === 'success' ? badge('已连通','success') : badge('待检测','warning')}</div><div><span>最近更新</span><strong>${formatTime(app.updated_at)}</strong></div></div></section>`,
+    endpoints: `<section class="table-panel"><div class="page-actions"><div><h2>登录回调地址</h2><p>OIDC 登录只允许精确匹配。</p></div><span class="count">${redirects.length} 个</span></div><ul class="uri-list">${redirectRows}</ul>${addRedirect}<div class="endpoint-divider"><strong>退出后返回地址</strong><p>业务系统清理本地 Session 后，应跳转统一认证的 end_session_endpoint。</p>${(client.post_logout_redirect_uris ?? []).map((uri) => `<code class="endpoint-code">${esc(uri)}</code>`).join('') || '<span>未配置</span>'}</div></section>`,
+    access: `<section class="table-panel"><div class="page-actions"><div><h2>访问规则</h2><p>拒绝优先，可按人员、部门或职位授权。</p></div><span class="count">${rules.length} 条</span></div>${addRule}<div class="table-wrap"><table><thead><tr><th>效果</th><th>主体类型</th><th>主体</th><th>有效时间</th><th>操作</th></tr></thead><tbody>${ruleRows || '<tr><td colspan="5" class="empty-cell">暂无规则；规则模式下，无允许规则即无法访问</td></tr>'}</tbody></table></div></section>`,
+    security: secretSettings,
+    monitor: `<section class="table-panel"><div class="page-actions"><div><h2>连通监控</h2><p>${esc(app.health_check_url ?? '未配置检测地址')}</p></div><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<button class="button primary">立即检测</button></form></div><div class="table-wrap"><table><thead><tr><th>检测时间</th><th>结果</th><th>HTTP</th><th>耗时</th><th>说明</th></tr></thead><tbody>${checkRows || '<tr><td colspan="5" class="empty-cell">暂无检测记录</td></tr>'}</tbody></table></div></section>`,
+  }[tab];
+  res.send(adminPage(req, app.name, 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span>${esc(app.name)}</div><div class="service-header"><div><h2>${esc(app.name)}</h2><code>${esc(app.client_id)}</code></div><div>${statusBadge(app.status)} ${app.access_mode === 'all_active' ? badge('全部有效人员') : badge('按规则授权', 'warning')}</div></div><nav class="subtabs">${tabs}</nav>${tabContent}`, `接入服务管理`));
 });
 
-router.post('/applications/:id/settings', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const name = String(req.body.name ?? '').trim(); if (!name || !['active', 'disabled'].includes(req.body.status) || !['all_active', 'rules'].includes(req.body.access_mode)) return res.sendStatus(400); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("UPDATE applications SET name=?,status=?,access_mode=?,provisioning_enabled=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [name, req.body.status, req.body.access_mode, req.body.provisioning_enabled === '1' ? 1 : 0, req.params.id]); await updateClient(connection, apps[0].client_id, (payload) => { payload.client_name = name; }); }); await audit(req, 'application_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: req.params.id }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
-router.post('/applications/:id/redirects', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const uri = validateRedirectUri(req.body.redirect_uri); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, uri]); await updateClient(connection, apps[0].client_id, (payload) => { payload.redirect_uris = [...new Set([...(payload.redirect_uris ?? []), uri])]; }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
+router.post('/applications/:id/settings', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const name = String(req.body.name ?? '').trim(); if (!name || !['active', 'disabled'].includes(req.body.status) || !['all_active', 'rules'].includes(req.body.access_mode)) return res.sendStatus(400); const [redirects] = await pool.execute('SELECT redirect_uri FROM application_redirect_uris WHERE application_id=? ORDER BY id LIMIT 1', [req.params.id]); if (!redirects[0]) throw new Error('应用没有登录回调地址'); const homeUrl = validateRelatedUrl(req.body.home_url, redirects[0].redirect_uri, '业务系统首页'); const healthUrl = validateRelatedUrl(req.body.health_check_url, redirects[0].redirect_uri, '连通检测地址'); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("UPDATE applications SET name=?,home_url=?,health_check_url=?,status=?,access_mode=?,provisioning_enabled=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [name, homeUrl, healthUrl, req.body.status, req.body.access_mode, req.body.provisioning_enabled === '1' ? 1 : 0, req.params.id]); await updateClient(connection, apps[0].client_id, (payload) => { payload.client_name = name; }); }); await audit(req, 'application_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: req.params.id }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=overview`)); } catch (error) { next(error); } });
+router.post('/applications/:id/redirects', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const uri = validateRedirectUri(req.body.redirect_uri); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, uri]); await updateClient(connection, apps[0].client_id, (payload) => { payload.redirect_uris = [...new Set([...(payload.redirect_uris ?? []), uri])]; }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=endpoints`)); } catch (error) { next(error); } });
 router.post('/applications/:id/redirects/remove', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; await withTransaction(async (connection) => { const [items] = await connection.execute('SELECT r.redirect_uri,a.client_id,(SELECT COUNT(*) FROM application_redirect_uris WHERE application_id=a.id) total FROM application_redirect_uris r JOIN applications a ON a.id=r.application_id WHERE r.id=? AND r.application_id=?', [req.body.redirect_id, req.params.id]); if (!items[0] || items[0].total <= 1) throw new Error('应用必须至少保留一个回调地址'); await connection.execute('DELETE FROM application_redirect_uris WHERE id=?', [req.body.redirect_id]); await updateClient(connection, items[0].client_id, (payload) => { payload.redirect_uris = (payload.redirect_uris ?? []).filter((uri) => uri !== items[0].redirect_uri); }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
-router.post('/applications/:id/rotate-secret', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const secret = randomToken(48); const hash = await hashPassword(secret); let app; await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=?', [req.params.id]); app = apps[0]; if (!app) throw new Error('应用不存在'); await connection.execute("UPDATE applications SET client_secret_hash=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [hash, app.id]); await updateClient(connection, app.client_id, (payload) => { payload.client_secret = secret; }); }); await audit(req, 'client_secret_rotate', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: app.client_id }); res.send(secretResult(req, '密钥轮换成功', app, secret)); } catch (error) { next(error); } });
+router.post('/applications/:id/rotate-secret', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const secret = randomToken(48); const hash = await hashPassword(secret); let app; await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=?', [req.params.id]); app = apps[0]; if (!app || app.client_id === ADMIN_CLIENT_ID) throw new Error('应用不存在或不可轮换'); await connection.execute("UPDATE applications SET client_secret_hash=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [hash, app.id]); await updateClient(connection, app.client_id, (payload) => { payload.client_secret = secret; }); }); await audit(req, 'client_secret_rotate', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: app.client_id }); res.send(secretResult(req, '密钥轮换成功', app, secret)); } catch (error) { next(error); } });
 router.post('/applications/:id/rules', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const [choiceType, choiceId] = String(req.body.subject_choice ?? '').split(':', 2); const type = choiceType; const subjectId = type === 'person' ? String(req.body.person_id ?? '').trim() : choiceId; if (!['person', 'department', 'position'].includes(type) || !subjectId || !['allow', 'deny'].includes(req.body.effect)) return res.sendStatus(400); const table = { person: 'people', department: 'departments', position: 'positions' }[type]; const [subject] = await pool.execute(`SELECT id FROM ${table} WHERE id=?`, [subjectId]); if (!subject[0]) throw new Error('授权主体不存在'); const starts = req.body.starts_at ? new Date(req.body.starts_at).toISOString() : null; const ends = req.body.ends_at ? new Date(req.body.ends_at).toISOString() : null; if (starts && ends && starts >= ends) throw new Error('结束时间必须晚于开始时间'); await pool.execute("INSERT INTO application_access_rules(application_id,effect,subject_type,subject_id,starts_at,ends_at,created_at) VALUES (?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, req.body.effect, type, subjectId, starts, ends]); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
 router.post('/applications/:id/rules/remove', requireAdmin, body, requireCsrf, async (req, res) => { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; await pool.execute('DELETE FROM application_access_rules WHERE id=? AND application_id=?', [req.body.rule_id, req.params.id]); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); });
 router.post('/applications/:id/registration', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const userId = String(req.body.user_id ?? '').trim(); const displayName = String(req.body.display_name ?? '').trim(); if (!/^[A-Za-z0-9_.@-]{2,120}$/.test(userId) || !displayName || displayName.length > 160) return res.sendStatus(400); const [apps] = await pool.execute('SELECT id,name,client_id FROM applications WHERE id=? AND provisioning_enabled=1', [req.params.id]); const app = apps[0]; if (!app) throw new Error('该应用未启用快捷注册'); const token = randomToken(32); const id = randomUUID(); const expires = new Date(Date.now() + 15 * 60_000).toISOString(); await pool.execute("INSERT INTO quick_registration_tokens(id,application_id,token_hash,user_id,display_name,expires_at,created_by,created_at) VALUES (?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [id, app.id, sha256(token), userId, displayName, expires, req.admin.person.id]); const url = `${config.issuer}/register/${token}`; res.send(adminPage(req, '注册链接已生成', 'applications', `<div class="notice success-notice"><strong>链接 15 分钟内单次有效</strong><p>请发送给 ${esc(displayName)}（${esc(userId)}），密码只在统一认证中心设置。</p></div><section class="card"><div class="secret-row"><code class="secret" id="registration-url">${esc(url)}</code><button class="button secondary small" type="button" data-copy="#registration-url">复制链接</button></div><div class="card-actions"><a class="button primary" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">返回应用</a></div></section>`)); } catch (error) { next(error); } });
@@ -186,6 +366,32 @@ router.get('/people', requireAdmin, async (req, res) => {
   const canEdit = hasRole(req, ['super_admin', 'personnel_admin']);
   const rows = people.map((p) => `<tr><td><strong>${esc(p.display_name)}</strong><small>${esc(p.id)}</small></td><td>${esc(p.department ?? '—')}<small>${esc(p.position ?? '未设置')}</small></td><td>${esc(p.grade_year ?? '—')}</td><td>${statusBadge(p.status)} ${p.permanent_member ? badge('永久', 'info') : ''}</td><td>${formatTime(p.last_login_at)}</td><td>${canEdit ? `<form class="row-form" method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}`)}">${csrf(req)}<select name="status">${['candidate','probation','active','retired','left','graduated','dismissed'].map((s) => `<option value="${s}" ${p.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select><select name="permanent_member"><option value="0" ${p.permanent_member ? '' : 'selected'}>正常</option><option value="1" ${p.permanent_member ? 'selected' : ''}>永久</option></select><button class="button ghost small">保存</button></form>` : ''}</td></tr>`).join('');
   res.send(adminPage(req, '人员与账号', 'people', `<section class="card"><div class="card-header"><div><h2>统一人员目录</h2><p>UserID 是企业微信身份和各业务系统的唯一主键</p></div><span class="count">${people.length} 人</span></div><div class="table-wrap"><table><thead><tr><th>人员</th><th>部门 / 职位</th><th>年级</th><th>状态</th><th>最近登录</th><th>管理</th></tr></thead><tbody>${rows}</tbody></table></div></section>`, '人员状态会实时影响所有接入应用'));
+});
+
+router.get('/organization', requireAdmin, async (req, res) => {
+  const [[departments], [positions]] = await Promise.all([
+    pool.execute(`SELECT d.id,d.name,d.status,COUNT(DISTINCT ap.person_id) member_count FROM departments d LEFT JOIN appointments ap ON ap.department_id=d.id AND ap.status='active' GROUP BY d.id ORDER BY d.name`),
+    pool.execute(`SELECT p.id,p.name,p.rank_order,p.status,COUNT(DISTINCT ap.person_id) member_count FROM positions p LEFT JOIN appointments ap ON ap.position_id=p.id AND ap.status='active' GROUP BY p.id ORDER BY p.rank_order DESC,p.name`),
+  ]);
+  const departmentRows = departments.map((item) => `<tr><td><strong>${esc(item.name)}</strong><small>${esc(item.id)}</small></td><td>${item.member_count}</td><td>${statusBadge(item.status)}</td></tr>`).join('');
+  const positionRows = positions.map((item) => `<tr><td><strong>${esc(item.name)}</strong><small>${esc(item.id)}</small></td><td>${item.rank_order}</td><td>${item.member_count}</td><td>${statusBadge(item.status)}</td></tr>`).join('');
+  res.send(adminPage(req, '部门与职位', 'organization', `<div class="split-tables"><section class="table-panel"><div class="page-actions"><div><h2>部门</h2><p>当前任职人员按部门汇总</p></div></div><div class="table-wrap"><table><thead><tr><th>部门</th><th>人数</th><th>状态</th></tr></thead><tbody>${departmentRows}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>职位</h2><p>职位级别和当前人数</p></div></div><div class="table-wrap"><table><thead><tr><th>职位</th><th>级别</th><th>人数</th><th>状态</th></tr></thead><tbody>${positionRows}</tbody></table></div></section></div>`, '组织结构与人员任职分开维护'));
+});
+
+router.get('/sessions', requireAdmin, async (req, res) => {
+  if (forbidUnless(req, res, ['super_admin', 'security_admin'])) return;
+  const [records] = await pool.execute("SELECT id,payload,created_at,updated_at,expires_at FROM oidc_objects WHERE model='Session' ORDER BY updated_at DESC LIMIT 200");
+  const sessions = records.map((record) => {
+    try { return { ...record, accountId: decryptJson(JSON.parse(record.payload)).accountId ?? '—' }; } catch { return { ...record, accountId: '无法读取' }; }
+  });
+  const rows = sessions.map((session) => `<tr><td><strong>${esc(session.accountId)}</strong></td><td><code>${esc(session.id.slice(0, 12))}…</code></td><td>${formatTime(session.created_at)}</td><td>${formatTime(session.updated_at)}</td><td>${formatTime(session.expires_at)}</td><td><form method="post" action="${publicUrl('/admin/sessions/revoke')}">${csrf(req)}<input type="hidden" name="session_id" value="${esc(session.id)}"><button class="button danger small">注销会话</button></form></td></tr>`).join('');
+  res.send(adminPage(req, '登录会话', 'sessions', `<section class="table-panel"><div class="page-actions"><div><h2>统一认证会话</h2><p>这里注销的是认证中心会话；接入应用应使用标准注销代码同步清理自己的 Session。</p></div><span class="count">${sessions.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>UserID</th><th>会话</th><th>建立</th><th>最近活动</th><th>过期</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无有效会话</td></tr>'}</tbody></table></div></section>`, '会话查看、强制注销与统一退出'));
+});
+router.post('/sessions/revoke', requireAdmin, body, requireCsrf, async (req, res) => {
+  if (forbidUnless(req, res, ['super_admin', 'security_admin'])) return;
+  await pool.execute("DELETE FROM oidc_objects WHERE model='Session' AND id=?", [req.body.session_id]);
+  await audit(req, 'session_revoke', 'success', { actorPersonId: req.admin.person.id, targetType: 'session', targetId: String(req.body.session_id).slice(0, 80) });
+  res.redirect(publicUrl('/admin/sessions'));
 });
 
 router.get('/terms', requireAdmin, async (req, res) => {
@@ -205,9 +411,9 @@ router.get('/audit', requireAdmin, async (req, res) => {
 });
 
 router.get('/integration', requireAdmin, (req, res) => {
-  const endpoints = [['Issuer', config.issuer], ['Discovery', `${config.issuer}/.well-known/openid-configuration`], ['Authorization', `${config.issuer}/auth`], ['Token', `${config.issuer}/token`], ['UserInfo', `${config.issuer}/me`], ['JWKS', `${config.issuer}/jwks`]];
+  const endpoints = [['Issuer', config.issuer], ['Discovery', `${config.issuer}/.well-known/openid-configuration`], ['Authorization', `${config.issuer}/auth`], ['Token', `${config.issuer}/token`], ['UserInfo', `${config.issuer}/me`], ['Logout', `${config.issuer}/session/end`], ['JWKS', `${config.issuer}/jwks`]];
   const rows = endpoints.map(([name, url]) => `<div class="endpoint-row"><span>${name}</span><code id="ep-${name}">${esc(url)}</code><button type="button" class="button ghost small" data-copy="#ep-${name}">复制</button></div>`).join('');
-  res.send(adminPage(req, '接入指南', 'integration', `<section class="card"><div class="card-header"><div><h2>OIDC 服务地址</h2><p>业务系统优先通过 Discovery 自动读取端点</p></div></div><div class="endpoint-list">${rows}</div></section><div class="two-column"><section class="card"><h2>标准接入流程</h2><ol class="steps"><li><span>1</span><div><strong>在“应用接入”中新建应用</strong><p>填写名称和精确回调地址，保存一次性 Client Secret。</p></div></li><li><span>2</span><div><strong>业务系统安装通用 SDK</strong><p>配置 Issuer、Client ID、Client Secret 和回调地址。</p></div></li><li><span>3</span><div><strong>配置访问范围</strong><p>选择全部有效人员，或按人员、部门、职位添加规则。</p></div></li><li><span>4</span><div><strong>从业务入口验收</strong><p>测试密码登录、企业微信扫码、免重复登录和无权拒绝。</p></div></li></ol></section><section class="card"><h2>业务系统获得的身份</h2><div class="claim-list"><code>sub</code><span>唯一 UserID（本企业为学号）</span><code>preferred_username</code><span>登录账号</span><code>name</code><span>姓名</span><code>department</code><span>当前部门</span><code>position</code><span>当前职位</span></div><div class="notice info">业务系统不写登录页面，也不接触用户密码；只需发起 OIDC 登录并读取回调身份。</div></section></div>`, '给业务开发人员和 Agent 使用的参数'));
+  res.send(adminPage(req, '接入文档', 'integration', `<section class="table-panel"><div class="page-actions"><div><h2>OIDC 服务地址</h2><p>业务系统优先通过 Discovery 自动读取登录、令牌、用户信息和注销端点。</p></div><a class="button primary" href="${publicUrl('/admin/applications/new')}">打开接入向导</a></div><div class="endpoint-list">${rows}</div></section><section class="table-panel"><div class="page-actions"><div><h2>标准接入与验收</h2><p>向导已经生成所需代码，无需业务人员自己拼接协议参数。</p></div></div><div class="process-table"><div><strong>1. 登记服务</strong><span>业务首页、登录回调、退出返回、检测地址</span></div><div><strong>2. 复制文件</strong><span>守卫、回调、注销、健康检测、登录测试、注销测试</span></div><div><strong>3. 三项验收</strong><span>签名连通、真实认证、统一注销</span></div><div><strong>4. 权限与运行</strong><span>按人员/部门/职位授权，并持续查看监控和审计</span></div></div></section><section class="table-panel"><div class="page-actions"><div><h2>业务系统获得的身份</h2><p>统一认证负责身份与入口准入，业务内部权限仍由业务系统管理。</p></div></div><div class="claim-list"><code>sub</code><span>唯一 UserID（本企业为学号）</span><code>preferred_username</code><span>登录账号</span><code>name</code><span>姓名</span><code>department</code><span>当前部门</span><code>position</code><span>当前职位</span></div></section>`, '登录、注销、代码与测试集中说明'));
 });
 
 router.post('/terms', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; const starts = new Date(req.body.starts_at).toISOString(); const ends = new Date(req.body.ends_at).toISOString(); if (starts >= ends) throw new Error('开始时间必须早于结束时间'); const now = new Date().toISOString(); await pool.execute("INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES (?,?,?,?,'draft',?,?)", [req.body.id, req.body.name, starts, ends, now, now]); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });

@@ -11,6 +11,8 @@ Treat the OIDC `sub` claim as the canonical UserID. In this enterprise it is als
 
 Before changing an application, identify its framework, current session mechanism, callback URL, logout behavior, and routes that need authentication. Preserve public routes. Add an authentication guard, callback, and logout route using the framework's maintained OIDC library when possible.
 
+When the Enterprise SSO onboarding wizard is available, use its generated files as the source of truth. Deploy the signed health probe plus the generated login and logout verification pages, then complete all three checks in the wizard before declaring the integration complete.
+
 Validate issuer, signature through JWKS, audience, expiration, `state`, `nonce`, and PKCE. Register exact callback URLs; do not use wildcards. Keep the client secret server-side and out of source control, browser code, logs, and error pages.
 
 After callback, create only the application's own session. Keep the minimum claims it needs. Check `authorization_version` when sensitive permissions are cached, and require a new authorization round trip when the version changes. The central SSO session will normally complete that trip without asking the user to authenticate again.

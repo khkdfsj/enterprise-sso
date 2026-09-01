@@ -43,11 +43,15 @@
 
 网页管理后台地址：`http://210.47.163.114/enterprise-sso/admin`
 
-- 应用接入：`http://210.47.163.114/enterprise-sso/admin/applications`
+- 服务纵览：`http://210.47.163.114/enterprise-sso/admin/applications`
+- 新增接入向导：`http://210.47.163.114/enterprise-sso/admin/applications/new`
+- 连通与监控：`http://210.47.163.114/enterprise-sso/admin/monitoring`
 - 人员与账号：`http://210.47.163.114/enterprise-sso/admin/people`
+- 部门与职位：`http://210.47.163.114/enterprise-sso/admin/organization`
 - 届次换届：`http://210.47.163.114/enterprise-sso/admin/terms`
-- 登录与审计：`http://210.47.163.114/enterprise-sso/admin/audit`
-- 接入指南：`http://210.47.163.114/enterprise-sso/admin/integration`
+- 登录会话：`http://210.47.163.114/enterprise-sso/admin/sessions`
+- 审计日志：`http://210.47.163.114/enterprise-sso/admin/audit`
+- 接入文档：`http://210.47.163.114/enterprise-sso/admin/integration`
 
 受控命令行仍可用于部署、应急恢复和批量操作：
 
