@@ -37,7 +37,7 @@ curl http://127.0.0.1/enterprise-sso/healthz
 
 # 118
 systemctl is-active enterprise-sso.service
-curl http://127.0.0.1:3000/healthz
+curl http://127.0.0.1:3000/enterprise-sso/healthz
 ```
 
 OIDC 验收还应检查 Discovery 的所有 URL 都包含 `/enterprise-sso`，并确认响应没有 `Strict-Transport-Security`。同一 IP 仍承载 HTTP 系统，因此本项目禁止发送 HSTS。
