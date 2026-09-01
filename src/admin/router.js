@@ -8,7 +8,7 @@ import { hashPassword } from '../security/password.js';
 import { checkApplicationConnectivity } from '../services/application-monitor.js';
 import { buildIntegrationPackage, deriveIntegrationUrls } from '../services/integration-package.js';
 import { ADMIN_CLIENT_ID, adminCallbackUrl, adminClientSecret, adminLoggedOutUrl } from '../services/system-admin-client.js';
-import { addWorkflowMembers, createTurnoverWorkflow, publishTurnoverWorkflow, saveRetainedMembers } from '../services/turnover-workflow.js';
+import { addWorkflowMembers, createTurnoverWorkflow, deleteTurnoverWorkflowDraft, publishTurnoverWorkflow, saveRetainedMembers } from '../services/turnover-workflow.js';
 import { publicUrl } from '../public-url.js';
 import { formatBeijingTime, parseBeijingLocalTime } from './time.js';
 
@@ -164,6 +164,9 @@ function wizardSteps(current) {
 }
 function turnoverSteps(current) {
   return `<ol class="wizard-steps turnover-steps">${['确定届次', '选择留任', '调整职位', '新增委员', '核对发布'].map((label, index) => `<li class="${index + 1 < current ? 'done' : index + 1 === current ? 'current' : ''}"><span>${index + 1}</span><strong>${label}</strong></li>`).join('')}</ol>`;
+}
+function turnoverDeletePage(req, workflow, error = '') {
+  return adminPage(req, '删除换届草稿', 'terms', `<div class="breadcrumb"><a href="${publicUrl('/admin/terms')}">届次换届</a><span>/</span><span>删除确认</span></div>${error ? `<div class="notice danger-notice"><strong>未删除草稿</strong><p>${esc(error)}</p></div>` : ''}<section class="table-panel danger-zone"><div class="page-actions"><div><h2>删除 ${esc(workflow.target_name)}</h2><p>将删除本次换届进度、已选留任名单、新增委员草稿和未发布的目标届次。当前生效届次、现有人员、账号和历史任职不会改变。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/delete`)}">${csrf(req)}<label class="span-2">输入目标届次名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(workflow.target_name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}`)}">取消</a><button class="button danger">确认删除草稿</button></div></form></section>`, '只有草稿可以删除，已发布届次不受影响');
 }
 function canManagePersonnel(req) {
   return hasRole(req, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
@@ -632,10 +635,11 @@ router.get('/terms', requireAdmin, async (req, res) => {
   ]);
   const canEdit = canManagePersonnel(req);
   const draft = workflows.find((w) => w.status === 'draft');
-  const workflowRows = workflows.map((w) => `<tr><td><strong>${esc(w.target_name)}</strong><small>来源：${esc(w.source_name)}</small></td><td>第 ${w.current_step} / 5 步</td><td>${w.member_count} 人</td><td>${statusBadge(w.status)}</td><td>${formatTime(w.updated_at)}</td><td>${w.status === 'draft' ? `<a class="button primary small" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(w.id)}`)}">继续办理</a>` : `<a class="button ghost small" href="${publicUrl(`/admin/people?term=${encodeURIComponent(w.target_term_id)}`)}">查看名单</a>`}</td></tr>`).join('');
+  const workflowRows = workflows.map((w) => `<tr><td><strong>${esc(w.target_name)}</strong><small>来源：${esc(w.source_name)}</small></td><td>第 ${w.current_step} / 5 步</td><td>${w.member_count} 人</td><td>${statusBadge(w.status)}</td><td>${formatTime(w.updated_at)}</td><td><div class="action-row">${w.status === 'draft' ? `<a class="button primary small" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(w.id)}`)}">继续办理</a>${canEdit ? `<a class="button danger small" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(w.id)}/delete`)}">删除草稿</a>` : ''}` : `<a class="button ghost small" href="${publicUrl(`/admin/people?term=${encodeURIComponent(w.target_term_id)}`)}">查看名单</a>`}</div></td></tr>`).join('');
   const termRows = terms.map((t) => `<tr><td><strong>${esc(t.name)}</strong><small>${esc(t.id)}</small></td><td>${formatTime(t.starts_at)}<small>至 ${formatTime(t.ends_at)}</small></td><td>${statusBadge(t.status)}</td><td><a class="button ghost small" href="${publicUrl(`/admin/people?term=${encodeURIComponent(t.id)}`)}">查看人员</a></td></tr>`).join('');
   const action = canEdit ? draft ? `<a class="button primary" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(draft.id)}`)}">继续未完成换届</a>` : `<a class="button primary" href="${publicUrl('/admin/turnovers/new')}">开始新换届</a>` : '';
-  res.send(adminPage(req, '届次换届', 'terms', `<section class="table-panel"><div class="page-actions"><div><h2>五步换届流程</h2><p>每一步自动保存，可中途离开、继续办理或返回上一步。</p></div>${action}</div><div class="process-table five-process"><div><strong>1. 确定届次</strong><span>选择当前届次和新成员年级</span></div><div><strong>2. 选择留任</strong><span>永久用户自动保留，无需选择</span></div><div><strong>3. 调整职位</strong><span>委员升副部长，副部长升部长</span></div><div><strong>4. 新增委员</strong><span>支持单人和批量导入</span></div><div><strong>5. 核对发布</strong><span>未留任人员自动卸任</span></div></div></section><section class="table-panel"><div class="page-actions"><div><h2>办理记录</h2><p>草稿会保存当前步骤和已录入名单。</p></div><span class="count">${workflows.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>目标届次</th><th>进度</th><th>名单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${workflowRows || '<tr><td colspan="6" class="empty-cell">暂无换届记录</td></tr>'}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>历届组织</h2><p>可进入人员目录查看任一届次的完整名单。</p></div></div><div class="table-wrap"><table><thead><tr><th>届次</th><th>有效时间</th><th>状态</th><th>人员</th></tr></thead><tbody>${termRows}</tbody></table></div></section>`, '年度人员变化的可续办操作流程'));
+  const deletedNotice = req.query.deleted === '1' ? '<div class="notice success-notice"><strong>草稿已删除</strong><p>当前生效届次和正式人员数据没有变化。</p></div>' : '';
+  res.send(adminPage(req, '届次换届', 'terms', `${deletedNotice}<section class="table-panel"><div class="page-actions"><div><h2>五步换届流程</h2><p>每一步自动保存，可中途离开、继续办理或返回上一步。</p></div>${action}</div><div class="process-table five-process"><div><strong>1. 确定届次</strong><span>选择当前届次和新成员年级</span></div><div><strong>2. 选择留任</strong><span>永久用户自动保留，无需选择</span></div><div><strong>3. 调整职位</strong><span>委员升副部长，副部长升部长</span></div><div><strong>4. 新增委员</strong><span>支持单人和批量导入</span></div><div><strong>5. 核对发布</strong><span>未留任人员自动卸任</span></div></div></section><section class="table-panel"><div class="page-actions"><div><h2>办理记录</h2><p>草稿会保存当前步骤和已录入名单。</p></div><span class="count">${workflows.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>目标届次</th><th>进度</th><th>名单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${workflowRows || '<tr><td colspan="6" class="empty-cell">暂无换届记录</td></tr>'}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>历届组织</h2><p>可进入人员目录查看任一届次的完整名单。</p></div></div><div class="table-wrap"><table><thead><tr><th>届次</th><th>有效时间</th><th>状态</th><th>人员</th></tr></thead><tbody>${termRows}</tbody></table></div></section>`, '年度人员变化的可续办操作流程'));
 });
 
 router.get('/turnovers/new', requireAdmin, async (req, res) => {
@@ -705,7 +709,34 @@ router.get('/turnovers/:id', requireAdmin, async (req, res) => {
       content = `<section class="wizard-panel"><div class="wizard-heading"><span>第五步</span><h2>核对并发布 ${esc(workflow.target_name)}</h2><p>发布后，未留任人员自动卸任；永久用户自动保留；新委员生成后六位初始密码。</p></div><div class="notice">共 ${members.length} 名普通人员。永久用户会在发布时自动加入，不计入此数字。</div><div class="table-wrap"><table><thead><tr><th>人员</th><th>处理方式</th><th>年级</th><th>部门</th><th>职位</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty-cell">名单为空，不能发布</td></tr>'}</tbody></table></div><form method="post" action="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/publish`)}">${csrf(req)}<div class="wizard-actions separated"><a class="button ghost" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}?step=4`)}">返回新增委员</a><button class="button primary" ${members.length ? '' : 'disabled'}>确认发布新届</button></div></form></section>`;
     }
   }
-  res.send(adminPage(req, `换届：${workflow.target_name}`, 'terms', `${turnoverSteps(step)}${content}`, `草稿自动保存 · 当前第 ${step} 步`));
+  const draftActions = canManagePersonnel(req) ? `<section class="table-panel"><div class="page-actions"><div><h2>草稿操作</h2><p>不再办理本次换届时，可以删除全部草稿进度；当前届次不会受影响。</p></div><a class="button danger" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/delete`)}">删除草稿</a></div></section>` : '';
+  res.send(adminPage(req, `换届：${workflow.target_name}`, 'terms', `${turnoverSteps(step)}${content}${draftActions}`, `草稿自动保存 · 当前第 ${step} 步`));
+});
+
+router.get('/turnovers/:id/delete', requireAdmin, async (req, res) => {
+  if (!canManagePersonnel(req)) return res.status(403).send(adminPage(req, '无权删除', 'terms', '<div class="empty">只有部长、老师和管理员可以删除换届草稿。</div>'));
+  const [rows] = await pool.execute(`SELECT w.id,w.target_term_id,t.name target_name FROM turnover_workflows w JOIN organization_terms t ON t.id=w.target_term_id WHERE w.id=? AND w.status='draft'`, [req.params.id]);
+  const workflow = rows[0];
+  if (!workflow) return res.status(404).send(adminPage(req, '草稿不存在', 'terms', '<div class="empty">该换届草稿不存在或已经发布，不能删除。</div>'));
+  return res.send(turnoverDeletePage(req, workflow));
+});
+
+router.post('/turnovers/:id/delete', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (!canManagePersonnel(req)) return res.status(403).send(adminPage(req, '无权删除', 'terms', '<div class="empty">只有部长、老师和管理员可以删除换届草稿。</div>'));
+    const [rows] = await pool.execute(`SELECT w.id,w.target_term_id,t.name target_name FROM turnover_workflows w JOIN organization_terms t ON t.id=w.target_term_id WHERE w.id=? AND w.status='draft'`, [req.params.id]);
+    const workflow = rows[0];
+    if (!workflow) return res.status(404).send(adminPage(req, '草稿不存在', 'terms', '<div class="empty">该换届草稿不存在或已经发布，不能删除。</div>'));
+    if (String(req.body.confirm_name ?? '').trim() !== workflow.target_name) {
+      return res.status(400).send(turnoverDeletePage(req, workflow, '输入的目标届次名称不一致。'));
+    }
+    const deleted = await deleteTurnoverWorkflowDraft(workflow.id);
+    await audit(req, 'turnover_workflow_delete', 'success', { actorPersonId: req.admin.person.id, targetType: 'turnover_workflow', targetId: deleted.id, detail: { target_term_id: deleted.targetTermId, target_name: deleted.targetName, member_count: deleted.memberCount } });
+    return res.redirect(publicUrl('/admin/terms?deleted=1'));
+  } catch (error) {
+    if (error.expose) return res.status(error.status ?? 400).send(adminPage(req, '无法删除草稿', 'terms', `<div class="notice danger-notice"><strong>草稿未删除</strong><p>${esc(error.message)}</p></div><a class="button primary" href="${publicUrl('/admin/terms')}">返回换届记录</a>`, '当前届次和正式人员数据未发生变化'));
+    return next(error);
+  }
 });
 
 router.post('/turnovers/:id/retained', requireAdmin, body, requireCsrf, async (req, res, next) => { try {

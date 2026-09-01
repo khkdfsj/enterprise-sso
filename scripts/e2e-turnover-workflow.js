@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { database, pool } from '../src/db.js';
 import { verifyPassword } from '../src/security/password.js';
-import { addWorkflowMembers, createTurnoverWorkflow, publishTurnoverWorkflow, saveRetainedMembers } from '../src/services/turnover-workflow.js';
+import { addWorkflowMembers, createTurnoverWorkflow, deleteTurnoverWorkflowDraft, publishTurnoverWorkflow, saveRetainedMembers } from '../src/services/turnover-workflow.js';
 import { activateScheduledTerms } from '../src/services/terms.js';
 
 if (!process.env.DB_FILE || !/e2e/i.test(process.env.DB_FILE)) throw new Error('Workflow E2E requires an isolated e2e database');
@@ -57,6 +57,17 @@ await assert.rejects(
   /目标届次不能与当前生效届次相同/,
 );
 assert.equal(database.prepare('SELECT COUNT(*) count FROM turnover_workflows').get().count, 0);
+
+const disposableTerm = `workflow-disposable-${randomUUID()}`;
+const disposableWorkflow = await createTurnoverWorkflow({ sourceTermId: sourceTerm, targetTermId: disposableTerm, targetTermName: '待删除测试草稿', targetGradeYear: 2026, startsAt: effectiveAt, endsAt: future }, admin.id);
+await saveRetainedMembers(disposableWorkflow, [people.member]);
+const deletedDraft = await deleteTurnoverWorkflowDraft(disposableWorkflow);
+assert.equal(deletedDraft.targetTermId, disposableTerm);
+assert.equal(deletedDraft.memberCount, 1);
+assert.equal(database.prepare('SELECT COUNT(*) count FROM turnover_workflows WHERE id=?').get(disposableWorkflow).count, 0);
+assert.equal(database.prepare('SELECT COUNT(*) count FROM turnover_workflow_members WHERE workflow_id=?').get(disposableWorkflow).count, 0);
+assert.equal(database.prepare('SELECT COUNT(*) count FROM organization_terms WHERE id=?').get(disposableTerm).count, 0);
+assert.equal(database.prepare('SELECT COUNT(*) count FROM organization_terms WHERE id=?').get(sourceTerm).count, 1);
 
 const workflowId = await createTurnoverWorkflow({ sourceTermId: sourceTerm, targetTermId: targetTerm, targetTermName: '测试新一届', targetGradeYear: 2026, startsAt: effectiveAt, endsAt: future }, admin.id);
 await saveRetainedMembers(workflowId, [people.member, people.vice]);

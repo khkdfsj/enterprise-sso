@@ -32,6 +32,36 @@ export async function createTurnoverWorkflow(values, actorPersonId) {
   return id;
 }
 
+export async function deleteTurnoverWorkflowDraft(workflowId) {
+  return withTransaction(async (connection) => {
+    const [rows] = await connection.execute(
+      `SELECT w.id,w.target_term_id,t.name target_name,t.status target_status,
+        (SELECT COUNT(*) FROM turnover_workflow_members m WHERE m.workflow_id=w.id) member_count,
+        (SELECT COUNT(*) FROM appointments a WHERE a.term_id=w.target_term_id) appointment_count,
+        (SELECT COUNT(*) FROM term_publications p WHERE p.term_id=w.target_term_id) publication_count,
+        (SELECT COUNT(*) FROM turnover_runs r WHERE r.target_term_id=w.target_term_id) run_count
+       FROM turnover_workflows w JOIN organization_terms t ON t.id=w.target_term_id
+       WHERE w.id=? AND w.status='draft'`,
+      [workflowId],
+    );
+    const workflow = rows[0];
+    if (!workflow) throw workflowInputError('换届草稿不存在或已经发布，不能删除。', 404);
+    if (workflow.target_status !== 'draft' || workflow.appointment_count || workflow.publication_count || workflow.run_count) {
+      throw workflowInputError('目标届次已经产生正式数据，不能作为草稿删除。', 409);
+    }
+    const [deletedWorkflow] = await connection.execute("DELETE FROM turnover_workflows WHERE id=? AND status='draft'", [workflow.id]);
+    if (!deletedWorkflow.changes) throw workflowInputError('换届草稿状态已变化，请刷新后重试。', 409);
+    const [deletedTerm] = await connection.execute("DELETE FROM organization_terms WHERE id=? AND status='draft'", [workflow.target_term_id]);
+    if (!deletedTerm.changes) throw workflowInputError('目标届次状态已变化，请刷新后重试。', 409);
+    return {
+      id: workflow.id,
+      targetTermId: workflow.target_term_id,
+      targetName: workflow.target_name,
+      memberCount: workflow.member_count,
+    };
+  });
+}
+
 function promotedPosition(positionsByCode, previousCode, previousId) {
   if (previousCode === 'member') return positionsByCode.get('vice-minister') ?? previousId;
   if (previousCode === 'vice-minister') return positionsByCode.get('minister') ?? previousId;

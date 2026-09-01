@@ -208,8 +208,34 @@ try {
   const deletedList = await request(new URL(deleted.headers.get('location'), base));
   assert.doesNotMatch(await deletedList.text(), /ci-admin-created-app/);
   const restoreDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
-  restoreDatabase.prepare("UPDATE system_role_assignments SET status='active' WHERE person_id='dev-admin' AND role='super_admin'").run();
+  restoreDatabase.prepare("INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES ('ci-draft-target','CI 待删除届次',?,?, 'draft',?,?)").run(starts, ends, starts, starts);
+  restoreDatabase.prepare("INSERT INTO turnover_workflows(id,source_term_id,target_term_id,target_grade_year,current_step,status,created_by,created_at,updated_at) VALUES ('ci-draft-workflow','ci-delete-term','ci-draft-target',2026,2,'draft','dev-admin',?,?)").run(starts, starts);
   restoreDatabase.close();
+  const terms = await request(`${base}/admin/terms`);
+  assert.equal(terms.status, 200);
+  assert.match(await terms.text(), /\/admin\/turnovers\/ci-draft-workflow\/delete/);
+  const draftDeletePage = await request(`${base}/admin/turnovers/ci-draft-workflow/delete`);
+  assert.equal(draftDeletePage.status, 200);
+  assert.match(await draftDeletePage.text(), /确认删除草稿/);
+  const wrongDraftName = await request(`${base}/admin/turnovers/ci-draft-workflow/delete`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, confirm_name: '错误名称' }),
+  });
+  assert.equal(wrongDraftName.status, 400);
+  assert.match(await wrongDraftName.text(), /输入的目标届次名称不一致/);
+  const deletedDraft = await request(`${base}/admin/turnovers/ci-draft-workflow/delete`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, confirm_name: 'CI 待删除届次' }),
+  });
+  assert.equal(deletedDraft.status, 302);
+  const deletedDraftList = await request(new URL(deletedDraft.headers.get('location'), base));
+  assert.match(await deletedDraftList.text(), /草稿已删除/);
+  const verifyDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
+  assert.equal(verifyDatabase.prepare("SELECT COUNT(*) count FROM turnover_workflows WHERE id='ci-draft-workflow'").get().count, 0);
+  assert.equal(verifyDatabase.prepare("SELECT COUNT(*) count FROM organization_terms WHERE id='ci-draft-target'").get().count, 0);
+  assert.equal(verifyDatabase.prepare("SELECT COUNT(*) count FROM organization_terms WHERE id='ci-delete-term'").get().count, 1);
+  verifyDatabase.prepare("UPDATE system_role_assignments SET status='active' WHERE person_id='dev-admin' AND role='super_admin'").run();
+  verifyDatabase.close();
 } finally {
   await new Promise((resolve) => probe.close(resolve));
 }
