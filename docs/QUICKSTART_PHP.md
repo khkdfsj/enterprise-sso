@@ -32,8 +32,8 @@ $position = $ssoUser['position'] ?? null;
 
 ## 第四步：提供统一退出
 
-```html
-<a href="ESSO-DFSJ/logout.php">退出登录</a>
+```php
+<a href="<?= htmlspecialchars($essoLogoutUrl, ENT_QUOTES, 'UTF-8') ?>">退出登录</a>
 ```
 
 该文件同时删除本应用 Session 和 ESSO 统一会话。不要用刷新页面代替注销。

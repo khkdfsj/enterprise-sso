@@ -146,6 +146,7 @@ try {
   }
   assert.match(packageFiles.get('ESSO-DFSJ/README.txt'), /禁止改名/);
   assert.match(packageFiles.get('ESSO-DFSJ/login.php'), /\$ssoUser/);
+  assert.match(packageFiles.get('ESSO-DFSJ/login.php'), /\$essoLogoutUrl/);
   assert.match(packageFiles.get('ESSO-DFSJ/config.php'), /ESSO-DFSJ\/callback\.php/);
   generatedSecret = packageFiles.get('ESSO-DFSJ/config.php').match(/'client_secret' => '([^']+)'/)?.[1] ?? '';
   assert.ok(generatedSecret);
@@ -175,14 +176,20 @@ try {
   assert.match(onboardingHtml, /认证、注销和连通性都提供代码与真实测试/);
 
   const database = new DatabaseSync(process.env.E2E_DB_FILE);
-  database.prepare("UPDATE system_role_assignments SET role='application_admin' WHERE person_id='dev-admin' AND role='super_admin'").run();
+  database.prepare("UPDATE system_role_assignments SET status='disabled' WHERE person_id='dev-admin' AND role='super_admin'").run();
   let list = await request(`${base}/admin/applications`);
-  assert.doesNotMatch(await list.text(), new RegExp(`/admin/applications/${appId}/delete`));
+  assert.equal(list.status, 403);
   const now = new Date();
   const starts = new Date(now.getTime() - 3600_000).toISOString();
   const ends = new Date(now.getTime() + 3600_000).toISOString();
   database.prepare("INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES ('ci-delete-term','CI','2026-01-01T00:00:00.000Z','2027-01-01T00:00:00.000Z','active',?,?)").run(starts, starts);
   database.prepare("INSERT INTO departments(id,name,code,status,created_at,updated_at) VALUES ('ci-delete-dept','CI','ci-delete-dept','active',?,?)").run(starts, starts);
+  database.prepare("INSERT INTO positions(id,code,name,rank_order,status,created_at,updated_at) VALUES ('ci-teacher','teacher','指导老师',10,'active',?,?)").run(starts, starts);
+  database.prepare("INSERT INTO appointments(id,person_id,term_id,department_id,position_id,is_primary,starts_at,ends_at,status,created_at,updated_at) VALUES (?,'dev-admin','ci-delete-term','ci-delete-dept','ci-teacher',1,?,?,'active',?,?)").run(randomUUID(), starts, ends, starts, starts);
+  list = await request(`${base}/admin/applications`);
+  assert.equal(list.status, 200);
+  assert.match(await list.text(), new RegExp(`/admin/applications/${appId}/delete`));
+  database.prepare("UPDATE appointments SET status='ended' WHERE person_id='dev-admin' AND position_id='ci-teacher'").run();
   database.prepare("INSERT INTO positions(id,code,name,rank_order,status,created_at,updated_at) VALUES ('ci-minister','minister','部长',40,'active',?,?)").run(starts, starts);
   database.prepare("INSERT INTO appointments(id,person_id,term_id,department_id,position_id,is_primary,starts_at,ends_at,status,created_at,updated_at) VALUES (?,'dev-admin','ci-delete-term','ci-delete-dept','ci-minister',1,?,?,'active',?,?)").run(randomUUID(), starts, ends, starts, starts);
   database.close();
@@ -200,7 +207,7 @@ try {
   const deletedList = await request(new URL(deleted.headers.get('location'), base));
   assert.doesNotMatch(await deletedList.text(), /ci-admin-created-app/);
   const restoreDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
-  restoreDatabase.prepare("UPDATE system_role_assignments SET role='super_admin' WHERE person_id='dev-admin' AND role='application_admin'").run();
+  restoreDatabase.prepare("UPDATE system_role_assignments SET status='active' WHERE person_id='dev-admin' AND role='super_admin'").run();
   restoreDatabase.close();
 } finally {
   await new Promise((resolve) => probe.close(resolve));
@@ -211,6 +218,6 @@ console.log(JSON.stringify({
   flow: 'admin_via_internal_oidc',
   navigation: ['service_management', 'personnel_management', 'system_management'],
   onboarding: ['registration', 'ESSO-DFSJ_package', 'signed_connectivity', 'login_verification', 'logout_verification'],
-  deletion: 'minister_or_above_with_confirmation',
+  deletion: 'minister_teacher_or_admin_with_confirmation',
   password_exposure: false,
 }, null, 2));

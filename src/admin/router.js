@@ -19,6 +19,7 @@ const body = express.urlencoded({ extended: false, limit: '32kb' });
 const ttlMs = 2 * 60 * 60 * 1000;
 const packageDownloads = new Map();
 const phpSdkSource = readFileSync(new URL('../../sdk/php74/SsoClient.php', import.meta.url), 'utf8');
+const adminRoleNames = ['super_admin', 'security_admin', 'personnel_admin', 'application_admin', 'audit_viewer'];
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -59,16 +60,9 @@ function localEndpoint(path) {
 async function requireAdmin(req, res, next) {
   const session = readSession(req);
   if (!session) return res.redirect(publicUrl('/admin/login'));
-  const [rows] = await pool.execute(
-    `SELECT p.id,p.display_name,r.role FROM people p JOIN system_role_assignments r ON r.person_id=p.id
-     WHERE p.id=? AND p.status IN ('active','probation') AND r.status='active'
-       AND r.role IN ('super_admin','security_admin','personnel_admin','application_admin','audit_viewer')
-       AND (r.starts_at IS NULL OR r.starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       AND (r.ends_at IS NULL OR r.ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-    [session.personId],
-  );
-  if (!rows[0]) return res.status(403).send(loginPage('无权访问', '<p class="form-note">当前账号没有后台权限。</p>'));
-  req.admin = { ...session, person: rows[0], roles: rows.map((row) => row.role) };
+  const access = await loadAdminAccess(session.personId);
+  if (!access) return res.status(403).send(loginPage('无权访问', '<p class="form-note">当前账号不是部长、老师或后台管理员。</p>'));
+  req.admin = { ...session, person: access.person, roles: access.roles };
   next();
 }
 function requireCsrf(req, res, next) {
@@ -161,14 +155,15 @@ function onboardingCode(app, secret, projectRoot, redirectUri, logoutUri, health
   const verifyLoginUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-login`;
   const verifyLogoutUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-logout`;
   const rootPath = new URL(projectRoot).pathname;
+  const logoutPath = new URL('ESSO-DFSJ/logout.php', projectRoot).pathname;
   const configCode = `<?php\nreturn array(\n  'issuer' => '${config.issuer}',\n  'client_id' => '${app.client_id}',\n  'client_secret' => '${secret}',\n  'redirect_uri' => '${redirectUri}',\n  'post_logout_redirect_uri' => '${logoutUri}',\n  'allow_insecure_http' => true,\n  'local_cookie_secure' => false,\n  'session_name' => '${app.client_id.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 48).toUpperCase()}_SID',\n  'session_path' => '${rootPath}',\n  'local_idle_seconds' => 7200,\n  'local_absolute_seconds' => 28800,\n);`;
-  const login = `<?php\n// 在业务页面输出任何内容前引入本文件。\nrequire_once __DIR__ . '/SsoClient.php';\n$enterpriseSso = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$ssoUser = $enterpriseSso->requireLogin();\n// $ssoUser['sub'] 是唯一 UserID；还可读取 name、department、position。`;
+  const login = `<?php\n// 在业务页面输出任何内容前引入本文件。\nrequire_once __DIR__ . '/SsoClient.php';\n$enterpriseSso = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$ssoUser = $enterpriseSso->requireLogin();\n$essoLogoutUrl = '${logoutPath}';\n// $ssoUser['sub'] 是唯一 UserID；还可读取 name、department、position。`;
   const callback = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->handleCallback();`;
   const logout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/'); // 同时退出本应用和统一认证`;
   const health = `<?php\n$config = require __DIR__ . '/config.php';\nheader('Content-Type: application/json; charset=UTF-8');\necho json_encode([\n  'ok' => true,\n  'client_id' => $config['client_id'],\n  'signature' => hash_hmac('sha256', 'enterprise-sso-connectivity-v1', $config['client_secret']),\n]);\n// 检测地址：${healthUri}`;
   const testLogin = `<?php\n$config = require __DIR__ . '/config.php';\nrequire __DIR__ . '/login.php';\n$ts = time();\n$payload = 'login|' . $ssoUser['sub'] . '|' . $ts;\n$proof = hash_hmac('sha256', $payload, $config['client_secret']);\nheader('Location: ${verifyLoginUrl}?' . http_build_query([\n  'sub' => $ssoUser['sub'], 'ts' => $ts, 'proof' => $proof,\n]));\nexit;`;
   const testLogout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/', '${verifyLogoutUrl}');`;
-  const readme = `ESSO-DFSJ 统一认证接入包\n\n部署：把整个 ESSO-DFSJ 文件夹放到项目根目录，禁止改名。\n\n文件：\nconfig.php       基础配置和一次性 Client Secret，不得提交 Git 或公开下载。\nSsoClient.php    OIDC 协议客户端，负责 state、PKCE、令牌交换、用户信息和会话。\nlogin.php        登录入口及身份读取；业务页面引入后可使用 $ssoUser。\ncallback.php     统一认证回调，不能删除、不能直接访问。\nlogout.php       同时清理业务会话和统一认证会话。\nhealth.php       签名连通检测，验收后保留用于持续监控。\ntest-login.php   真实登录验收，全部测试通过后可删除。\ntest-logout.php  真实注销验收，全部测试通过后可删除。\n\n保护业务页面（文件第一行）：\nrequire_once __DIR__ . '/ESSO-DFSJ/login.php';\n$userId = $ssoUser['sub'];\n$name = $ssoUser['name'];\n\n退出链接：\n<a href=\"ESSO-DFSJ/logout.php\">退出登录</a>\n\n项目根地址：${projectRoot}\n`;
+  const readme = `ESSO-DFSJ 统一认证接入包\n\n部署：把整个 ESSO-DFSJ 文件夹放到项目根目录，禁止改名。\n\n文件：\nconfig.php       基础配置和一次性 Client Secret，不得提交 Git 或公开下载。\nSsoClient.php    OIDC 协议客户端，负责 state、PKCE、令牌交换、用户信息和会话。\nlogin.php        登录入口及身份读取；业务页面引入后可使用 $ssoUser。\ncallback.php     统一认证回调，不能删除、不能直接访问。\nlogout.php       同时清理业务会话和统一认证会话。\nhealth.php       签名连通检测，验收后保留用于持续监控。\ntest-login.php   真实登录验收，全部测试通过后可删除。\ntest-logout.php  真实注销验收，全部测试通过后可删除。\n\n保护业务页面（文件第一行）：\nrequire_once __DIR__ . '/ESSO-DFSJ/login.php';\n$userId = $ssoUser['sub'];\n$name = $ssoUser['name'];\n\n退出链接（根页面或子目录都适用）：\n<a href=\"<?= htmlspecialchars($essoLogoutUrl, ENT_QUOTES, 'UTF-8') ?>\">退出登录</a>\n\n项目根地址：${projectRoot}\n`;
   return { configCode, login, callback, logout, health, testLogin, testLogout, readme };
 }
 
@@ -187,12 +182,28 @@ function integrationPackage(snippets) {
 }
 
 async function canDeleteApplications(req) {
-  if (hasRole(req, ['super_admin'])) return true;
-  const [rows] = await pool.execute(`SELECT 1 FROM appointments a JOIN positions p ON p.id=a.position_id
-    WHERE a.person_id=? AND a.status='active' AND p.status='active' AND p.rank_order>=(
-      SELECT COALESCE(MAX(rank_order),40) FROM positions WHERE code='minister' OR name='部长'
-    ) AND a.starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now') AND a.ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now') LIMIT 1`, [req.admin.person.id]);
-  return Boolean(rows[0]);
+  return hasRole(req, [...adminRoleNames, 'organization_leader', 'teacher']);
+}
+
+async function loadAdminAccess(personId) {
+  const [[people], [roleRows], [appointments]] = await Promise.all([
+    pool.execute("SELECT id,display_name FROM people WHERE id=? AND status IN ('active','probation')", [personId]),
+    pool.execute(`SELECT role FROM system_role_assignments WHERE person_id=? AND status='active'
+      AND role IN ('super_admin','security_admin','personnel_admin','application_admin','audit_viewer')
+      AND (starts_at IS NULL OR starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      AND (ends_at IS NULL OR ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))`, [personId]),
+    pool.execute(`SELECT p.name,p.code,p.rank_order,
+      CASE WHEN p.code IN ('teacher','advisor') OR p.name LIKE '%老师%' OR p.name LIKE '%教师%' THEN 1 ELSE 0 END is_teacher,
+      CASE WHEN p.rank_order>=(SELECT COALESCE(MAX(rank_order),40) FROM positions WHERE code='minister' OR name='部长') THEN 1 ELSE 0 END is_leader
+      FROM appointments a JOIN positions p ON p.id=a.position_id
+      WHERE a.person_id=? AND a.status='active' AND p.status='active'
+        AND a.starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now') AND a.ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')`, [personId]),
+  ]);
+  if (!people[0]) return null;
+  const roles = [...new Set(roleRows.map((row) => row.role))];
+  if (appointments.some((item) => item.is_teacher)) roles.push('teacher');
+  if (appointments.some((item) => item.is_leader)) roles.push('organization_leader');
+  return roles.length ? { person: people[0], roles } : null;
 }
 
 router.get('/login', (req, res) => {
@@ -236,8 +247,8 @@ router.get('/callback', async (req, res, next) => {
     const userResponse = await fetch(localEndpoint('/me'), { headers: { authorization: `Bearer ${token.access_token}` }, signal: AbortSignal.timeout(5000) });
     if (!userResponse.ok) throw new Error('统一认证身份读取失败');
     const user = await userResponse.json();
-    const [roles] = await pool.execute("SELECT role FROM system_role_assignments WHERE person_id=? AND status='active'", [user.sub]);
-    if (!roles.length) return res.status(403).send(loginPage('无权访问', '<p class="form-note">此账号已完成统一认证，但没有后台管理权限。</p>'));
+    const access = await loadAdminAccess(user.sub);
+    if (!access) return res.status(403).send(loginPage('无权访问', '<p class="form-note">此账号已完成统一认证，但不是部长、老师或后台管理员。</p>'));
     res.setHeader('Set-Cookie', [cookie(makeSession(user.sub)), flowCookie('', 0)]);
     await audit(req, 'admin_oidc_login', 'success', { actorPersonId: user.sub, targetType: 'application', targetId: ADMIN_CLIENT_ID });
     return res.redirect(publicUrl('/admin'));
@@ -384,16 +395,16 @@ router.get('/monitoring', requireAdmin, async (req, res) => {
 });
 
 router.get('/applications/:id/delete', requireAdmin, async (req, res) => {
-  if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有超级管理员或当前部长级及以上的后台管理员可以删除接入服务。</div>'));
+  if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有当前部长及以上职级、老师或后台管理员可以删除接入服务。</div>'));
   const [apps] = await pool.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
   const app = apps[0];
   if (!app) return res.sendStatus(404);
-  res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '部长级以上删除权限与二次确认'));
+  res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '部长、老师和管理员删除权限与二次确认'));
 });
 
 router.post('/applications/:id/delete', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有超级管理员或当前部长级及以上的后台管理员可以删除接入服务。</div>'));
+    if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有当前部长及以上职级、老师或后台管理员可以删除接入服务。</div>'));
     let app;
     await withTransaction(async (connection) => {
       const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);

@@ -141,11 +141,11 @@ require_once dirname(__DIR__) . '/ESSO-DFSJ/login.php';
 
 ### 6.2 提供退出按钮
 
-```html
-<a href="ESSO-DFSJ/logout.php">退出登录</a>
+```php
+<a href="<?= htmlspecialchars($essoLogoutUrl, ENT_QUOTES, 'UTF-8') ?>">退出登录</a>
 ```
 
-若现有系统还维护自己的额外业务 Session，应先清理业务字段，再跳转该文件；不要只刷新页面。
+`$essoLogoutUrl` 由 `login.php` 按登记的项目根地址生成，因此根页面和子目录页面都能使用。若现有系统还维护自己的额外业务 Session，应先清理业务字段，再跳转该地址；不要只刷新页面。
 
 ### 6.3 标准身份字段
 
