@@ -270,7 +270,7 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     const accessMode = req.body.access_mode === 'all_active' ? 'all_active' : 'rules';
     if (!name || name.length > 180 || !/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('应用名称或 Client ID 格式不正确');
     const id = randomUUID(); const secret = randomToken(48); const hash = await hashPassword(secret); const now = new Date().toISOString();
-    const verificationLogoutUri = `${config.issuer}/admin/applications/${encodeURIComponent(id)}/verify-logout`;
+    const verificationLogoutUri = `${config.issuer}/api/v1/integration-tests/${encodeURIComponent(id)}/logout`;
     const clientPayload = { client_id: clientId, client_secret: secret, client_name: name, redirect_uris: [redirectUri], post_logout_redirect_uris: [logoutUri, verificationLogoutUri], response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256' };
     await withTransaction(async (connection) => {
       await connection.execute("INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?)", [id, clientId, name, hash, accessMode, req.body.provisioning_enabled === '1' ? 1 : 0, homeUrl, healthUri, now, now]);

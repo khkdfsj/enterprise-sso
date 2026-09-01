@@ -10,6 +10,8 @@
 - `GET /api/v1/agent/services/:id`：查询服务地址和三项验收状态。
 - `POST /api/v1/agent/services/:id/monitor`：启动 30 分钟持续连通监控。
 - `POST /api/v1/agent/services/:id/tests/connectivity`：立即执行 Client Secret 签名连通检测。
+- `GET /api/v1/integration-tests/:id/login`：接收 `test-login.php` 的短时 HMAC 登录验收回报。
+- `GET /api/v1/integration-tests/:id/logout`：接收 `test-logout.php` 的短时 HMAC 注销验收回报。
 
 ## 用户访问地址
 

@@ -154,6 +154,13 @@ router.post('/api/v1/agent/services', json, async (req, res, next) => {
       [req.agent.credential.id, req.agent.requestId],
     );
     if (prior[0]) {
+      const verificationLogoutUri = `${config.issuer}/api/v1/integration-tests/${encodeURIComponent(prior[0].id)}/logout`;
+      const [clientRows] = await pool.execute("SELECT payload FROM oidc_objects WHERE model='Client' AND id=?", [prior[0].client_id]);
+      if (clientRows[0]) {
+        const client = decryptJson(JSON.parse(clientRows[0].payload));
+        client.post_logout_redirect_uris = [...new Set([...(client.post_logout_redirect_uris ?? []), verificationLogoutUri])];
+        await pool.execute("UPDATE oidc_objects SET payload=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE model='Client' AND id=?", [JSON.stringify(encryptJson(client)), prior[0].client_id]);
+      }
       const packageIssue = await issuePackageToken(prior[0].id, req.agent.credential.id);
       return res.status(200).json({ request_id: req.agent.requestId, idempotent_replay: true, ...(await responseForService(prior[0], packageIssue)) });
     }
@@ -168,7 +175,7 @@ router.post('/api/v1/agent/services', json, async (req, res, next) => {
       client_secret: secret,
       client_name: values.name,
       redirect_uris: [urls.redirectUri],
-      post_logout_redirect_uris: [urls.logoutUri, `${config.issuer}/admin/applications/${encodeURIComponent(id)}/verify-logout`],
+      post_logout_redirect_uris: [urls.logoutUri, `${config.issuer}/api/v1/integration-tests/${encodeURIComponent(id)}/logout`],
       response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256',
     };
     let packageIssue;

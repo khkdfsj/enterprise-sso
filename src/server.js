@@ -28,6 +28,7 @@ import { loginPage, messagePage, qrPage } from './views/html.js';
 import { adminRouter } from './admin/router.js';
 import { provisioningRouter } from './provisioning/router.js';
 import { agentRouter } from './agent/router.js';
+import { integrationTestsRouter } from './integration-tests/router.js';
 import { publicUrl } from './public-url.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -146,6 +147,7 @@ router.get('/healthz', async (_req, res) => {
 router.get('/', (_req, res) => res.redirect(publicUrl('/.well-known/openid-configuration')));
 router.use('/admin', noStore, adminRouter);
 router.use(noStore, agentRouter);
+router.use(noStore, integrationTestsRouter);
 router.use(noStore, provisioningRouter);
 
 router.get('/interaction/:uid', noStore, async (req, res, next) => {

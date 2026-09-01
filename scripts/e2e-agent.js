@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { pool } from '../src/db.js';
-import { randomToken, sha256 } from '../src/security/crypto.js';
+import { decryptJson, randomToken, sha256 } from '../src/security/crypto.js';
 
 const issuer = process.env.E2E_ISSUER ?? 'http://127.0.0.1:3000';
 const identity = 'codex:test:agent-api';
@@ -65,6 +65,22 @@ assert.equal(response.status, 200);
 payload = await response.json();
 assert.equal(payload.service.id, serviceId);
 assert.match(payload.tests.login.url, /ESSO-DFSJ\/test-login\.php$/);
+
+const [clientRows] = await pool.execute("SELECT o.payload FROM applications a JOIN oidc_objects o ON o.model='Client' AND o.id=a.client_id WHERE a.id=?", [serviceId]);
+const clientSecret = decryptJson(JSON.parse(clientRows[0].payload)).client_secret;
+const timestamp = Math.floor(Date.now() / 1000);
+response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/login?sub=${encodeURIComponent(admins[0].person_id)}&ts=${timestamp}&proof=invalid`);
+assert.equal(response.status, 403);
+const loginProof = createHmac('sha256', clientSecret).update(`login|${admins[0].person_id}|${timestamp}`).digest('hex');
+response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/login?sub=${encodeURIComponent(admins[0].person_id)}&ts=${timestamp}&proof=${loginProof}`);
+assert.equal(response.status, 200);
+const logoutProof = createHmac('sha256', clientSecret).update(`logout|${timestamp}`).digest('hex');
+response = await fetch(`${issuer}/api/v1/integration-tests/${serviceId}/logout?ts=${timestamp}&proof=${logoutProof}`);
+assert.equal(response.status, 200);
+response = await fetch(`${issuer}/api/v1/agent/services/${serviceId}`, { headers: headers('agent-service-status-0002') });
+payload = await response.json();
+assert.equal(payload.tests.login.status, 'passed');
+assert.equal(payload.tests.logout.status, 'passed');
 
 response = await fetch(`${issuer}/api/v1/agent/capabilities`, { headers: { ...headers('agent-identity-mismatch-0001'), 'x-esso-agent-identity': 'codex:test:wrong-agent' } });
 assert.equal(response.status, 403);
