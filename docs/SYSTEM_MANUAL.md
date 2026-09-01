@@ -1,8 +1,8 @@
-# Enterprise SSO 系统总说明
+# ESSO-DFSJ（Enterprise SSO）系统总说明
 
 ## 1. 系统用途
 
-Enterprise SSO 是企业内部统一身份认证中心。所有受管应用共用一个登录页面，支持账号密码和企业微信扫码。用户在有效会话期内访问其他已授权应用时不必重复输入密码。
+ESSO 是 Enterprise Single Sign-On 的简称。它是企业内部统一身份认证中心；`ESSO-DFSJ` 同时是生成式接入包的固定目录名。所有受管应用共用一个登录页面，支持账号密码和企业微信扫码。用户在有效会话期内访问其他已授权应用时不必重复输入密码。
 
 旧 `WeComVerificationSystem`、`DepartmentIFO` 及其他服务器程序不属于本项目。本系统使用平行代码、独立服务、独立端口和独立数据库。
 
@@ -27,15 +27,16 @@ Enterprise SSO 是企业内部统一身份认证中心。所有受管应用共�
 
 ## 4. 应用怎样接入
 
-管理员在“应用接入”模块登记应用名称和精确回调地址，取得 `client_id` 和一次性显示的 `client_secret`，再配置启停状态、准入范围和人员/部门/职位规则。应用使用 OIDC Authorization Code + PKCE，不自行收集统一认证密码。
+管理员在“新增接入服务”中只填写应用名称和浏览器可访问的项目根地址。系统自动登记精确登录回调、注销返回、健康检查和两项验收地址，并生成一次性的 `ESSO-DFSJ.zip`。接入者把完整文件夹放入项目根目录且禁止更名，不需要逐个复制 SDK 文件或手工填写 Client Secret。
 
-PHP 7.4 应用可复制 `sdk/php74`，填写配置并在受保护页面第一行引入：
+PHP 7.4 应用在受保护页面第一行引入：
 
 ```php
-require_once __DIR__ . '/sso/guard.php';
+require_once __DIR__ . '/ESSO-DFSJ/login.php';
+$userId = $ssoUser['sub'];
 ```
 
-登录页面、扫码页面、密码校验、OIDC 令牌签发均由认证中心负责。
+退出链接使用 `login.php` 提供的 `$essoLogoutUrl`。部署后必须完成健康连通、真实登录和真实注销三项验收；全部通过后可删除 `test-login.php`、`test-logout.php`，保留 `health.php` 持续监控。登录页面、扫码页面、密码校验、OIDC 令牌签发均由认证中心负责。
 
 ## 5. 人员和换届
 
@@ -55,7 +56,7 @@ require_once __DIR__ . '/sso/guard.php';
 - 网页应用登记、回调地址管理、密钥轮换和准入规则；
 - 网页人员账号、届次换届、登录审计和接入指南；
 - 超级管理员初始化、批量迁移和应急维护 CLI；
-- PHP 7.4 SDK；
+- 一次性 `ESSO-DFSJ.zip` PHP 7.4 接入包、固定目录调用和三项自动验收；
 - 审计基础数据结构与自动化测试。
 
 继续优化项：

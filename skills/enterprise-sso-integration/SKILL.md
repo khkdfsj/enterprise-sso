@@ -1,22 +1,38 @@
 ---
 name: enterprise-sso-integration
-description: Integrate an internal web application with Enterprise SSO through OIDC hosted login, session reuse, authorization claims, or the optional quick-registration API. Use when an application must stop owning a login page or password database.
+description: Integrate an internal application with ESSO-DFSJ hosted login, UserID identity, unified logout, connectivity checks, or quick registration. Use when an application should stop owning a login page or password database.
 ---
 
-# Enterprise SSO integration
+# ESSO-DFSJ application integration
 
-Use the authorization-code flow with PKCE. Redirect unauthenticated users to the central authorization endpoint; do not add an application-specific login form, accept Enterprise SSO passwords, or copy its session cookie.
+Prefer the ESSO onboarding wizard and its generated package over hand-written protocol code. The application must not build its own ESSO password form, receive an ESSO password, copy the central session cookie, or call WeCom directly.
 
-Treat the OIDC `sub` claim as the canonical UserID. In this enterprise it is also the student number and WeCom UserID. Never join identities by display name. Store `sub` as a string without numeric conversion or truncation.
+## Before changing an application
 
-Before changing an application, identify its framework, current session mechanism, callback URL, logout behavior, and routes that need authentication. Preserve public routes. Add an authentication guard, callback, and logout route using the framework's maintained OIDC library when possible.
+Identify the application root, public URL root, framework, existing session and logout behavior, public routes, and routes that require authentication. Preserve public routes and application-specific authorization. ESSO establishes identity and application entry permission; it does not replace the application's internal business roles.
 
-When the ESSO onboarding wizard is available, use its generated `ESSO-DFSJ.zip` as the source of truth. Extract the fixed `ESSO-DFSJ` directory into the application root without renaming it. Deploy the signed health probe plus the generated login and logout verification pages, then complete all three checks in the wizard before declaring the integration complete. Delete only `test-login.php` and `test-logout.php` after acceptance; retain `health.php`.
+## PHP 7.4 package workflow
 
-Validate issuer, signature through JWKS, audience, expiration, `state`, `nonce`, and PKCE. Register exact callback URLs; do not use wildcards. Keep the client secret server-side and out of source control, browser code, logs, and error pages.
+1. Register the service in the ESSO onboarding wizard using its browser-visible project root URL.
+2. Download the one-time `ESSO-DFSJ.zip` generated for that service. Treat this package as the credential source of truth.
+3. Extract the complete `ESSO-DFSJ` directory into the application root without renaming it or copying selected files by hand.
+4. In each protected PHP entry point, before any output, load `ESSO-DFSJ/login.php`. Read the authenticated identity from `$ssoUser`; use `$ssoUser['sub']` as the canonical string UserID.
+5. Point logout actions to the `$essoLogoutUrl` supplied by `login.php`. Do not implement logout as a page reload or local-session deletion alone.
+6. Complete the wizard's signed health check, real hosted-login check, and unified-logout check.
+7. After all three checks pass, delete only `test-login.php` and `test-logout.php`. Retain `health.php` for monitoring and retain every runtime file.
 
-After callback, create only the application's own session. Keep the minimum claims it needs. Check `authorization_version` when sensitive permissions are cached, and require a new authorization round trip when the version changes. The central SSO session will normally complete that trip without asking the user to authenticate again.
+Never rename `ESSO-DFSJ`. Never commit its generated `config.php` or Client Secret to Git, logs, browser code, or error pages.
 
-If an application needs to onboard an unknown UserID, use quick registration only after an administrator enables provisioning for that client. The API returns a short-lived central registration URL; redirect the user there. Never collect or relay the new password in the application.
+## Identity and session rules
 
-Read [references/integration-api.md](references/integration-api.md) for endpoints, claims, quick-registration calls, errors, and acceptance checks.
+Treat OIDC `sub` as the permanent identity key. In this enterprise it is the WeCom UserID and student/employee number. Store it as a string without numeric conversion. Names, departments, and positions can change and must not be identity keys.
+
+Create only the application's own local session after callback. When sensitive application permissions are cached, use `authorization_version` to invalidate stale authorization data. A valid central SSO session can complete a fresh authorization without asking for credentials again.
+
+## Non-PHP applications
+
+If the generated PHP package cannot run in the target framework, use its registered values with the framework's maintained OIDC Authorization Code + PKCE client. Preserve the same callback, claims, logout, and acceptance rules. Read [references/integration-api.md](references/integration-api.md) for the package contract, endpoints, claims, non-PHP fallback, quick registration, errors, and acceptance checks.
+
+## Quick registration
+
+Use quick registration only after an administrator enables provisioning for the client. Redirect the browser to the short-lived registration URL returned by ESSO. Never collect or relay the new password inside the business application.

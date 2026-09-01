@@ -1,4 +1,4 @@
 interface:
-  display_name: "Enterprise SSO Integration"
-  short_description: "Integrate internal applications with Enterprise SSO"
-  default_prompt: "Integrate this application with Enterprise SSO using OIDC and the hosted login page."
+  display_name: "ESSO-DFSJ Integration"
+  short_description: "Integrate internal apps with the ESSO-DFSJ package"
+  default_prompt: "Use $enterprise-sso-integration to integrate this application with the generated ESSO-DFSJ package and complete login, logout, and connectivity checks."

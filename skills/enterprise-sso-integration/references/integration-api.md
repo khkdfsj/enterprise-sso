@@ -1,32 +1,102 @@
-# Integration API reference
+# ESSO-DFSJ integration reference
 
-## Discovery and OIDC
+## Preferred generated-package contract
 
-Configure the issuer supplied by the Enterprise SSO administrator. The current internal deployment uses `http://210.47.163.114/enterprise-sso`; do not hard-code it when configuration is available.
+The onboarding wizard takes the application's browser-visible root URL and derives all protocol URLs below it. It returns a one-time `ESSO-DFSJ.zip`; the extracted directory name is part of the integration contract and must not change.
 
-- Discovery: `/.well-known/openid-configuration`
-- Flow: authorization code with PKCE (`S256`)
-- Scopes: `openid profile enterprise`
-- Logout: use the discovery document's `end_session_endpoint`
-- Callback URL: exact administrator-approved URI
+```text
+application-root/
+└── ESSO-DFSJ/
+    ├── config.php
+    ├── SsoClient.php
+    ├── login.php
+    ├── callback.php
+    ├── logout.php
+    ├── health.php
+    ├── test-login.php
+    ├── test-logout.php
+    └── README.txt
+```
 
-Expected claims:
+| File | Purpose | Keep after acceptance |
+| --- | --- | --- |
+| `config.php` | Issuer, Client ID, Client Secret, callback, logout, and local-session settings | Yes; server-side secret |
+| `SsoClient.php` | OIDC, state, PKCE, code exchange, UserInfo, and PHP Session client | Yes |
+| `login.php` | Require authentication and expose `$ssoUser` plus `$essoLogoutUrl` | Yes |
+| `callback.php` | Receive the registered authorization callback | Yes |
+| `logout.php` | Clear the local identity and invoke central logout | Yes |
+| `health.php` | Prove Client ID and secret possession with a signed health response | Yes |
+| `test-login.php` | Report one real hosted-login acceptance result | Delete after all checks pass |
+| `test-logout.php` | Report one real RP-initiated logout result | Delete after all checks pass |
+| `README.txt` | Package-specific deployment and usage instructions | Recommended |
+
+Do not independently reconstruct `config.php`; its secret is shown only through the one-time package. Do not expose the package as a public download.
+
+## PHP usage
+
+Run the guard before any HTML, whitespace, or output:
+
+```php
+<?php
+require_once __DIR__ . '/ESSO-DFSJ/login.php';
+
+$userId = $ssoUser['sub'];
+$name = $ssoUser['name'];
+$department = $ssoUser['department'] ?? null;
+$position = $ssoUser['position'] ?? null;
+```
+
+For an entry point in a subdirectory, resolve the actual application root rather than duplicating the package:
+
+```php
+require_once dirname(__DIR__) . '/ESSO-DFSJ/login.php';
+```
+
+Use the generated absolute-path logout variable so nested pages do not create a broken relative link:
+
+```php
+<a href="<?= htmlspecialchars($essoLogoutUrl, ENT_QUOTES, 'UTF-8') ?>">退出登录</a>
+```
+
+If the legacy application has additional local session fields, clear those fields before redirecting to `$essoLogoutUrl`. Do not stop after local cleanup: otherwise the central session immediately signs the user back in.
+
+## Claims
 
 | Claim | Meaning |
-|---|---|
-| `sub` | Canonical UserID; stable unique key |
+| --- | --- |
+| `sub` | Canonical string UserID; stable unique key |
 | `name` | Display name; never use as a key |
 | `preferred_username` | Login name, normally the UserID |
-| `employee_no` | UserID/student number compatibility field |
+| `employee_no` | Student/employee number compatibility field |
 | `department` | Active primary department object or `null` |
 | `position` | Active primary position object or `null` |
 | `authorization_version` | Incrementing permission revision |
 
-Access is decided by Enterprise SSO each time authorization runs. An OIDC `access_denied` response means the user authenticated but the application access rule rejected them; show a permission message rather than another login form.
+ESSO decides application entry access during each authorization. The application must still enforce its own business permissions after login.
+
+## Three acceptance checks
+
+1. `health.php` returns the expected Client ID and HMAC proof, and the ESSO monitor marks connectivity successful.
+2. `test-login.php` completes one real password or WeCom hosted login and returns a signed result to the wizard.
+3. `test-logout.php` clears both local and central sessions and returns to the registered verification address.
+
+Do not mark an integration complete from a health check alone. After all three pass, remove only the two `test-*.php` files and confirm ordinary login and logout still work.
+
+## OIDC fallback for non-PHP frameworks
+
+Use the Issuer supplied by the ESSO administrator. The current internal deployment is `http://210.47.163.114/enterprise-sso`; prefer Discovery instead of hard-coding individual endpoints.
+
+- Discovery: `/.well-known/openid-configuration`
+- Flow: Authorization Code with PKCE `S256`
+- Scopes: `openid profile enterprise`
+- Callback: exact registered URI; no wildcard
+- Logout: Discovery `end_session_endpoint` with the registered post-logout redirect URI
+
+The client must validate `state`, `nonce`, Issuer, audience, expiration, token signature through JWKS, and PKCE. Create the application's local session only after successful validation and UserInfo retrieval.
 
 ## Quick registration
 
-Only clients explicitly enabled for provisioning can call:
+Only a client explicitly enabled for provisioning may call:
 
 ```http
 POST /api/v1/registrations
@@ -36,34 +106,16 @@ Content-Type: application/json
 {"user_id":"2026999999","display_name":"示例用户"}
 ```
 
-Successful response (`201`):
+A successful `201` response contains a single-use registration URL that expires after 15 minutes. Redirect the browser to it. The business application must not proxy the registration form or password.
 
-```json
-{
-  "registration_id": "opaque-id",
-  "user_id": "2026999999",
-  "registration_url": "https://issuer/register/one-time-token",
-  "expires_at": "2026-08-31T01:15:00.000Z"
-}
-```
+- `401 invalid_client`: credentials are wrong, the service is disabled, or provisioning is disabled.
+- `400 invalid_request`: UserID or display-name validation failed.
+- OIDC `access_denied`: identity succeeded but the application access rule rejected the user; show a permission message instead of another login form.
 
-Redirect the browser to `registration_url`. It expires after 15 minutes and is single use. The business application must not proxy the registration form or password. `401 invalid_client` means the credentials are wrong, the app is disabled, or provisioning is not enabled. `400 invalid_request` means UserID or display name validation failed.
+## Security and operational boundaries
 
-## Session pattern
-
-1. Save a random `state`, `nonce`, and PKCE verifier in the application's server-side session.
-2. Redirect to the discovered authorization endpoint.
-3. At callback, compare `state`, exchange the code with the verifier, validate the ID token, and create the local session keyed by `sub`.
-4. Protect private routes with the local session. Redirect to OIDC when missing or when a permission refresh is required.
-5. Clear the local session at logout, then redirect through the discovered end-session endpoint with the registered post-logout redirect URI.
-
-## Acceptance checks
-
-- A logged-out visit reaches the hosted Enterprise SSO page; the application has no password form.
-- Password login and WeCom QR login both return the same `sub`.
-- Opening a second registered application reuses the SSO session within its configured lifetime.
-- A user without an allow rule receives `access_denied`.
-- Disabling the person, account, app, or rule prevents a fresh authorization.
-- Callback rejects wrong `state`, nonce, issuer, audience, expired tokens, and an unregistered redirect URI.
-- Quick registration exposes no password or client secret in browser URLs or logs.
-- The wizard's signed connectivity probe, real hosted-login test, and RP-initiated logout test all pass.
+- Never copy a Client Secret, token, authorization code, password, full Cookie, or generated `config.php` into Git or logs.
+- Never create an application-specific ESSO password page.
+- Never send CorpID, AgentID, CorpSecret, or WeCom access tokens to a business application; WeCom is an ESSO-internal identity source.
+- Preserve public routes and existing application authorization unless the integration request explicitly changes them.
+- Register exact URLs and keep the fixed package directory. A renamed or partially copied package is not a supported deployment.
