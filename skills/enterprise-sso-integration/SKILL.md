@@ -11,7 +11,7 @@ Treat the OIDC `sub` claim as the canonical UserID. In this enterprise it is als
 
 Before changing an application, identify its framework, current session mechanism, callback URL, logout behavior, and routes that need authentication. Preserve public routes. Add an authentication guard, callback, and logout route using the framework's maintained OIDC library when possible.
 
-When the Enterprise SSO onboarding wizard is available, use its generated files as the source of truth. Deploy the signed health probe plus the generated login and logout verification pages, then complete all three checks in the wizard before declaring the integration complete.
+When the ESSO onboarding wizard is available, use its generated `ESSO-DFSJ.zip` as the source of truth. Extract the fixed `ESSO-DFSJ` directory into the application root without renaming it. Deploy the signed health probe plus the generated login and logout verification pages, then complete all three checks in the wizard before declaring the integration complete. Delete only `test-login.php` and `test-logout.php` after acceptance; retain `health.php`.
 
 Validate issuer, signature through JWKS, audience, expiration, `state`, `nonce`, and PKCE. Register exact callback URLs; do not use wildcards. Keep the client secret server-side and out of source control, browser code, logs, and error pages.
 

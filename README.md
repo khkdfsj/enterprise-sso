@@ -1,4 +1,4 @@
-# Enterprise SSO
+# ESSO-DFSJ（Enterprise SSO）
 
 全新的企业统一身份认证系统，与旧 `WeComVerificationSystem`、`DepartmentIFO` 和 `auth-monitor` 不共享代码、数据库、Session 或密钥。
 
@@ -13,7 +13,7 @@
 - 最小人员、届次和任职模型
 - UserID（企业微信 UserID / 学号）作为人员唯一主键
 - 三大模块网页后台：接入服务管理、部门人员管理、系统管理
-- 四步服务接入向导：代码生成、签名连通检测、真实登录测试、统一注销测试
+- 四步服务接入向导：填写项目根地址、下载固定 `ESSO-DFSJ` 接入包、三项测试、完成验收
 - OIDC 标准注销、会话查看与管理员强制注销
 - 业务系统发起的一次性快捷注册
 - PHP 7.4 快速接入 SDK：业务页面只需引入一个守卫文件

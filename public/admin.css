@@ -76,6 +76,11 @@ td small, td strong + small { display: block; margin-top: 2px; color: #8b93a1; f
 .button.ghost { border-color: #dfe3e9; background: #fff; }
 .button.danger { border-color: #efb8b3; color: #b52d24; }
 .button.small { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.package-layout { margin: 18px 0; padding: 16px; border: 1px solid #d8e1ec; border-radius: 8px; background: #f8fafc; }
+.package-layout strong, .package-layout code { display: block; }
+.package-layout p { margin: 6px 0 12px; color: #667085; }
+.danger-zone { border-color: #f1c7c7; }
+.danger-zone h2 { color: #a62727; }
 .button.full { width: 100%; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
 .action-row, .wizard-actions { display: flex; align-items: center; gap: 7px; }

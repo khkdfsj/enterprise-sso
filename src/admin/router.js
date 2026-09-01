@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import express from 'express';
 import { config } from '../config.js';
 import { pool, withTransaction } from '../db.js';
@@ -9,11 +10,15 @@ import { checkApplicationConnectivity } from '../services/application-monitor.js
 import { ADMIN_CLIENT_ID, adminCallbackUrl, adminClientSecret, adminLoggedOutUrl } from '../services/system-admin-client.js';
 import { publishTerm } from '../services/terms.js';
 import { startTurnover } from '../services/turnover.js';
+import { createZip } from '../services/zip-archive.js';
 import { publicUrl } from '../public-url.js';
+import { formatBeijingTime, parseBeijingLocalTime } from './time.js';
 
 const router = express.Router();
 const body = express.urlencoded({ extended: false, limit: '32kb' });
 const ttlMs = 2 * 60 * 60 * 1000;
+const packageDownloads = new Map();
+const phpSdkSource = readFileSync(new URL('../../sdk/php74/SsoClient.php', import.meta.url), 'utf8');
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -108,7 +113,10 @@ function statusBadge(value) {
   const labels = { active: '启用', disabled: '停用', probation: '试用', retired: '已卸任', candidate: '候选', graduated: '已毕业', left: '已离开', dismissed: '已移除', draft: '草稿', review: '复核中', scheduled: '待生效', archived: '已归档', completed: '已完成', preparing: '处理中' };
   return badge(labels[value] ?? value, ['active', 'completed'].includes(value) ? 'success' : ['disabled', 'retired', 'left', 'graduated', 'dismissed'].includes(value) ? 'muted' : 'warning');
 }
-function formatTime(value) { return value ? esc(String(value).replace('T', ' ').replace(/\.\d{3}Z$/, '')) : '—'; }
+function formatTime(value) {
+  const formatted = formatBeijingTime(value);
+  return formatted ? esc(formatted) : '—';
+}
 function validateRedirectUri(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('回调地址必须是完整 URL'); }
@@ -136,23 +144,55 @@ function validateRelatedUrl(value, redirectUri, label, required = true) {
   if (parsed.host !== redirect.host) throw new Error(`${label}必须与登录回调使用同一主机`);
   return url;
 }
+function projectRootUrl(value) {
+  const parsed = new URL(validateRedirectUri(value));
+  parsed.search = '';
+  parsed.hash = '';
+  if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
+  return parsed.toString();
+}
 function codeBlock(id, title, code) {
   return `<div class="code-block"><div class="code-head"><strong>${esc(title)}</strong><button type="button" class="button ghost small" data-copy="#${esc(id)}">复制代码</button></div><pre id="${esc(id)}"><code>${esc(code)}</code></pre></div>`;
 }
 function wizardSteps(current) {
-  return `<ol class="wizard-steps">${['登记网站', '复制接入代码', '连通检测', '完成验收'].map((label, index) => `<li class="${index + 1 < current ? 'done' : index + 1 === current ? 'current' : ''}"><span>${index + 1}</span><strong>${label}</strong></li>`).join('')}</ol>`;
+  return `<ol class="wizard-steps">${['登记项目', '下载接入包', '部署与检测', '完成验收'].map((label, index) => `<li class="${index + 1 < current ? 'done' : index + 1 === current ? 'current' : ''}"><span>${index + 1}</span><strong>${label}</strong></li>`).join('')}</ol>`;
 }
-function onboardingCode(app, secret, redirectUri, logoutUri, healthUri) {
+function onboardingCode(app, secret, projectRoot, redirectUri, logoutUri, healthUri) {
   const verifyLoginUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-login`;
   const verifyLogoutUrl = `${config.issuer}/admin/applications/${encodeURIComponent(app.id)}/verify-logout`;
-  const configCode = `<?php\nreturn array(\n  'issuer' => '${config.issuer}',\n  'client_id' => '${app.client_id}',\n  'client_secret' => '${secret}',\n  'redirect_uri' => '${redirectUri}',\n  'post_logout_redirect_uri' => '${logoutUri}',\n  'allow_insecure_http' => true,\n  'local_cookie_secure' => false,\n  'session_name' => '${app.client_id.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 48).toUpperCase()}_SID',\n  'session_path' => '${new URL(redirectUri).pathname.replace(/\/[^/]*$/, '/')}',\n);`;
-  const guard = `<?php\nrequire_once __DIR__ . '/sso/guard.php';\n// 登录成功后的人员信息：$ssoUser['sub']、$ssoUser['name']、department、position`;
+  const rootPath = new URL(projectRoot).pathname;
+  const configCode = `<?php\nreturn array(\n  'issuer' => '${config.issuer}',\n  'client_id' => '${app.client_id}',\n  'client_secret' => '${secret}',\n  'redirect_uri' => '${redirectUri}',\n  'post_logout_redirect_uri' => '${logoutUri}',\n  'allow_insecure_http' => true,\n  'local_cookie_secure' => false,\n  'session_name' => '${app.client_id.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 48).toUpperCase()}_SID',\n  'session_path' => '${rootPath}',\n  'local_idle_seconds' => 7200,\n  'local_absolute_seconds' => 28800,\n);`;
+  const login = `<?php\n// 在业务页面输出任何内容前引入本文件。\nrequire_once __DIR__ . '/SsoClient.php';\n$enterpriseSso = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$ssoUser = $enterpriseSso->requireLogin();\n// $ssoUser['sub'] 是唯一 UserID；还可读取 name、department、position。`;
   const callback = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->handleCallback();`;
   const logout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/'); // 同时退出本应用和统一认证`;
   const health = `<?php\n$config = require __DIR__ . '/config.php';\nheader('Content-Type: application/json; charset=UTF-8');\necho json_encode([\n  'ok' => true,\n  'client_id' => $config['client_id'],\n  'signature' => hash_hmac('sha256', 'enterprise-sso-connectivity-v1', $config['client_secret']),\n]);\n// 检测地址：${healthUri}`;
-  const testLogin = `<?php\n$config = require __DIR__ . '/config.php';\nrequire __DIR__ . '/guard.php';\n$ts = time();\n$payload = 'login|' . $ssoUser['sub'] . '|' . $ts;\n$proof = hash_hmac('sha256', $payload, $config['client_secret']);\nheader('Location: ${verifyLoginUrl}?' . http_build_query([\n  'sub' => $ssoUser['sub'], 'ts' => $ts, 'proof' => $proof,\n]));\nexit;`;
+  const testLogin = `<?php\n$config = require __DIR__ . '/config.php';\nrequire __DIR__ . '/login.php';\n$ts = time();\n$payload = 'login|' . $ssoUser['sub'] . '|' . $ts;\n$proof = hash_hmac('sha256', $payload, $config['client_secret']);\nheader('Location: ${verifyLoginUrl}?' . http_build_query([\n  'sub' => $ssoUser['sub'], 'ts' => $ts, 'proof' => $proof,\n]));\nexit;`;
   const testLogout = `<?php\nrequire_once __DIR__ . '/SsoClient.php';\n$client = new EnterpriseSsoClient(require __DIR__ . '/config.php');\n$client->logout('/', '${verifyLogoutUrl}');`;
-  return { configCode, guard, callback, logout, health, testLogin, testLogout };
+  const readme = `ESSO-DFSJ 统一认证接入包\n\n部署：把整个 ESSO-DFSJ 文件夹放到项目根目录，禁止改名。\n\n文件：\nconfig.php       基础配置和一次性 Client Secret，不得提交 Git 或公开下载。\nSsoClient.php    OIDC 协议客户端，负责 state、PKCE、令牌交换、用户信息和会话。\nlogin.php        登录入口及身份读取；业务页面引入后可使用 $ssoUser。\ncallback.php     统一认证回调，不能删除、不能直接访问。\nlogout.php       同时清理业务会话和统一认证会话。\nhealth.php       签名连通检测，验收后保留用于持续监控。\ntest-login.php   真实登录验收，全部测试通过后可删除。\ntest-logout.php  真实注销验收，全部测试通过后可删除。\n\n保护业务页面（文件第一行）：\nrequire_once __DIR__ . '/ESSO-DFSJ/login.php';\n$userId = $ssoUser['sub'];\n$name = $ssoUser['name'];\n\n退出链接：\n<a href=\"ESSO-DFSJ/logout.php\">退出登录</a>\n\n项目根地址：${projectRoot}\n`;
+  return { configCode, login, callback, logout, health, testLogin, testLogout, readme };
+}
+
+function integrationPackage(snippets) {
+  return createZip({
+    'ESSO-DFSJ/config.php': snippets.configCode,
+    'ESSO-DFSJ/SsoClient.php': phpSdkSource,
+    'ESSO-DFSJ/login.php': snippets.login,
+    'ESSO-DFSJ/callback.php': snippets.callback,
+    'ESSO-DFSJ/logout.php': snippets.logout,
+    'ESSO-DFSJ/health.php': snippets.health,
+    'ESSO-DFSJ/test-login.php': snippets.testLogin,
+    'ESSO-DFSJ/test-logout.php': snippets.testLogout,
+    'ESSO-DFSJ/README.txt': snippets.readme,
+  });
+}
+
+async function canDeleteApplications(req) {
+  if (hasRole(req, ['super_admin'])) return true;
+  const [rows] = await pool.execute(`SELECT 1 FROM appointments a JOIN positions p ON p.id=a.position_id
+    WHERE a.person_id=? AND a.status='active' AND p.status='active' AND p.rank_order>=(
+      SELECT COALESCE(MAX(rank_order),40) FROM positions WHERE code='minister' OR name='部长'
+    ) AND a.starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now') AND a.ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now') LIMIT 1`, [req.admin.person.id]);
+  return Boolean(rows[0]);
 }
 
 router.get('/login', (req, res) => {
@@ -229,14 +269,15 @@ router.get('/', requireAdmin, async (req, res) => {
 
 router.get('/applications', requireAdmin, async (req, res) => {
   const [apps] = await pool.execute(`SELECT a.*,COUNT(DISTINCT r.id) redirect_count,COUNT(DISTINCT ar.id) rule_count FROM applications a LEFT JOIN application_redirect_uris r ON r.application_id=a.id LEFT JOIN application_access_rules ar ON ar.application_id=a.id WHERE a.client_id<>? GROUP BY a.id ORDER BY a.name`, [ADMIN_CLIENT_ID]);
-  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.home_url ? `<a href="${esc(app.home_url)}" target="_blank" rel="noopener">打开网站</a>` : '—'}</td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('异常', 'danger') : badge('未检测', 'muted')}</td><td>${statusBadge(app.status)}</td><td><div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">管理</a><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/onboarding?step=3`)}">测试</a></div></td></tr>`).join('');
+  const canDelete = await canDeleteApplications(req);
+  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.home_url ? `<a href="${esc(app.home_url)}" target="_blank" rel="noopener">打开网站</a>` : '—'}</td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('异常', 'danger') : badge('未检测', 'muted')}</td><td>${statusBadge(app.status)}</td><td><div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">管理</a><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/onboarding?step=3`)}">测试</a>${canDelete ? `<a class="button danger small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">删除</a>` : ''}</div></td></tr>`).join('');
   const addButton = hasRole(req, ['super_admin', 'application_admin']) ? `<a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a>` : '';
   res.send(adminPage(req, '服务纵览', 'applications', `<section class="table-panel"><div class="page-actions"><div><h2>接入服务</h2><p>集中管理网站、认证端点、权限与连通状态</p></div>${addButton}</div><div class="table-wrap"><table><thead><tr><th>服务</th><th>访问范围</th><th>业务入口</th><th>连通状态</th><th>启用状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">尚未接入服务</td></tr>'}</tbody></table></div></section>`, '表格纵览与集中操作'));
 });
 
 router.get('/applications/new', requireAdmin, (req, res) => {
   if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
-  res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记网站信息</h2><p>一次填写业务入口、登录回调、退出返回和连通检测地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">业务系统首页<input name="home_url" type="url" placeholder="http://210.47.163.114/path/" required></label><label class="span-2">登录回调地址<input name="redirect_uri" type="url" placeholder="http://210.47.163.114/path/sso/callback.php" required></label><label class="span-2">退出后返回地址<input name="logout_redirect_uri" type="url" placeholder="http://210.47.163.114/path/" required></label><label class="span-2">连通检测地址<input name="health_check_url" type="url" placeholder="http://210.47.163.114/path/sso/health.php" required></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">保存并生成接入代码</button></div></form></section>`, '向导会连续完成登记、代码、检测和验收'));
+  res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记项目基本信息</h2><p>只填写项目根地址，系统自动生成回调、注销、健康检查和测试地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">项目访问根地址<input name="project_root_url" type="url" placeholder="http://210.47.163.114/qywx/YourProject/" required><small>填写浏览器访问地址，不是服务器磁盘路径；地址必须以项目根目录结尾。</small></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">登记并生成 ESSO-DFSJ 接入包</button></div></form></section>`, '填一次项目地址，下载固定目录接入包'));
 });
 
 router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, next) => {
@@ -244,10 +285,11 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
     const name = String(req.body.name ?? '').trim();
     const clientId = String(req.body.client_id ?? '').trim() || `app_${randomToken(12)}`;
-    const redirectUri = validateRedirectUri(req.body.redirect_uri);
-    const homeUrl = validateRelatedUrl(req.body.home_url, redirectUri, '业务系统首页');
-    const logoutUri = validateRelatedUrl(req.body.logout_redirect_uri, redirectUri, '退出后返回地址');
-    const healthUri = validateRelatedUrl(req.body.health_check_url, redirectUri, '连通检测地址');
+    const homeUrl = projectRootUrl(req.body.project_root_url);
+    const packageBase = new URL('ESSO-DFSJ/', homeUrl);
+    const redirectUri = new URL('callback.php', packageBase).toString();
+    const logoutUri = homeUrl;
+    const healthUri = new URL('health.php', packageBase).toString();
     const accessMode = req.body.access_mode === 'all_active' ? 'all_active' : 'rules';
     if (!name || name.length > 180 || !/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('应用名称或 Client ID 格式不正确');
     const id = randomUUID(); const secret = randomToken(48); const hash = await hashPassword(secret); const now = new Date().toISOString();
@@ -260,9 +302,24 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     });
     await audit(req, 'application_create', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: clientId });
     const app = { id, name, client_id: clientId };
-    const snippets = onboardingCode(app, secret, redirectUri, logoutUri, healthUri);
-    res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(2)}<section class="wizard-panel"><div class="wizard-heading"><span>第二步</span><h2>复制接入文件</h2><p>Client Secret 只在本页显示一次。把 SDK 放到业务系统后，按文件名复制；测试文件用于向导自动验收。</p></div><div class="credential-table"><div><span>Issuer</span><code id="wizard-issuer">${esc(config.issuer)}</code><button data-copy="#wizard-issuer" class="button ghost small">复制</button></div><div><span>Client ID</span><code id="wizard-client">${esc(clientId)}</code><button data-copy="#wizard-client" class="button ghost small">复制</button></div><div><span>Client Secret</span><code id="wizard-secret">${esc(secret)}</code><button data-copy="#wizard-secret" class="button ghost small">复制</button></div></div><div class="code-tabs" data-tabs><div class="tab-buttons"><button class="active" data-tab="config" type="button">config.php</button><button data-tab="guard" type="button">受保护页面</button><button data-tab="callback" type="button">callback.php</button><button data-tab="logout" type="button">logout.php</button><button data-tab="health" type="button">health.php</button><button data-tab="test-login" type="button">test-login.php</button><button data-tab="test-logout" type="button">test-logout.php</button></div><div data-tab-panel="config">${codeBlock('code-config', '配置文件', snippets.configCode)}</div><div data-tab-panel="guard" hidden>${codeBlock('code-guard', '业务页面第一行', snippets.guard)}</div><div data-tab-panel="callback" hidden>${codeBlock('code-callback', '登录回调', snippets.callback)}</div><div data-tab-panel="logout" hidden>${codeBlock('code-logout', '统一注销', snippets.logout)}</div><div data-tab-panel="health" hidden>${codeBlock('code-health', '基础连通与凭据验证', snippets.health)}</div><div data-tab-panel="test-login" hidden>${codeBlock('code-test-login', '真实登录认证测试', snippets.testLogin)}</div><div data-tab-panel="test-logout" hidden>${codeBlock('code-test-logout', '真实统一注销测试', snippets.testLogout)}</div></div><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(id)}/monitor/start`)}">${csrf(req)}<button class="button primary">我已复制，开始三项验收</button></form></section>`, '向导会持续检测十分钟并引导登录、注销验收'));
+    const snippets = onboardingCode(app, secret, homeUrl, redirectUri, logoutUri, healthUri);
+    const downloadToken = randomToken(32);
+    packageDownloads.set(downloadToken, { appId: id, archive: integrationPackage(snippets), expires: Date.now() + 15 * 60_000 });
+    for (const [token, item] of packageDownloads) if (item.expires <= Date.now()) packageDownloads.delete(token);
+    const downloadUrl = publicUrl(`/admin/applications/${encodeURIComponent(id)}/package/${downloadToken}`);
+    res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(2)}<section class="wizard-panel"><div class="wizard-heading"><span>第二步</span><h2>下载 ESSO-DFSJ 接入包</h2><p>下载后解压，把整个 ESSO-DFSJ 文件夹放进项目根目录，禁止改名。下载链接和 Client Secret 仅本页有效。</p></div><div class="credential-table"><div><span>项目根地址</span><code>${esc(homeUrl)}</code></div><div><span>Client ID</span><code id="wizard-client">${esc(clientId)}</code><button data-copy="#wizard-client" class="button ghost small">复制</button></div><div><span>固定目录</span><code>ESSO-DFSJ/</code></div></div><div class="package-layout"><strong>接入包内含 9 个文件</strong><p>配置、协议客户端、登录与身份读取、回调、登出、健康检测、登录验收、登出验收和说明文档已经全部生成。</p><code>${esc(new URL('ESSO-DFSJ/login.php', homeUrl).toString())}</code></div><div class="wizard-actions"><a class="button primary" href="${downloadUrl}">下载 ESSO-DFSJ.zip</a><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(id)}/monitor/start`)}">${csrf(req)}<button class="button secondary">已部署，开始三项验收</button></form></div></section>`, '无需逐个复制文件，下载后整体部署'));
   } catch (error) { next(error); }
+});
+
+router.get('/applications/:id/package/:token', requireAdmin, async (req, res) => {
+  if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+  const item = packageDownloads.get(req.params.token);
+  if (!item || item.appId !== req.params.id || item.expires <= Date.now()) return res.status(410).send(adminPage(req, '下载已失效', 'application-new', '<div class="empty">接入包只在创建后短时间内提供。请删除未完成的测试服务并重新登记。</div>'));
+  packageDownloads.delete(req.params.token);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="ESSO-DFSJ.zip"');
+  res.setHeader('Cache-Control', 'no-store');
+  return res.send(item.archive);
 });
 
 router.post('/applications/:id/monitor/start', requireAdmin, body, requireCsrf, async (req, res, next) => {
@@ -326,6 +383,31 @@ router.get('/monitoring', requireAdmin, async (req, res) => {
   res.send(adminPage(req, '连通与监控', 'monitoring', `<section class="table-panel"><div class="page-actions"><div><h2>服务连通状态</h2><p>接入向导启动后持续检测十分钟，历史结果保留用于排障。</p></div></div><div class="table-wrap"><table><thead><tr><th>服务</th><th>检测地址</th><th>状态</th><th>HTTP</th><th>最近检测</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无服务</td></tr>'}</tbody></table></div></section>`, '集中查看业务系统可达性'));
 });
 
+router.get('/applications/:id/delete', requireAdmin, async (req, res) => {
+  if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有超级管理员或当前部长级及以上的后台管理员可以删除接入服务。</div>'));
+  const [apps] = await pool.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
+  const app = apps[0];
+  if (!app) return res.sendStatus(404);
+  res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '部长级以上删除权限与二次确认'));
+});
+
+router.post('/applications/:id/delete', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有超级管理员或当前部长级及以上的后台管理员可以删除接入服务。</div>'));
+    let app;
+    await withTransaction(async (connection) => {
+      const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
+      app = apps[0];
+      if (!app) throw new Error('接入服务不存在');
+      if (String(req.body.confirm_name ?? '').trim() !== app.name) throw new Error('输入的服务名称不一致，未执行删除');
+      await connection.execute("DELETE FROM oidc_objects WHERE model='Client' AND id=?", [app.client_id]);
+      await connection.execute('DELETE FROM applications WHERE id=?', [app.id]);
+    });
+    await audit(req, 'application_delete', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: app.client_id, detail: { name: app.name } });
+    return res.redirect(publicUrl('/admin/applications'));
+  } catch (error) { return next(error); }
+});
+
 router.get('/applications/:id', requireAdmin, async (req, res) => {
   const [[apps], [redirects], [rules], [departments], [positions], [clients], [checks]] = await Promise.all([
     pool.execute('SELECT * FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]), pool.execute('SELECT * FROM application_redirect_uris WHERE application_id=? ORDER BY id', [req.params.id]), pool.execute('SELECT * FROM application_access_rules WHERE application_id=? ORDER BY id DESC', [req.params.id]), pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"), pool.execute("SELECT id,name FROM positions WHERE status='active' ORDER BY rank_order DESC,name"), pool.execute("SELECT payload FROM oidc_objects WHERE model='Client' AND id=(SELECT client_id FROM applications WHERE id=?)", [req.params.id]), pool.execute('SELECT * FROM application_connectivity_checks WHERE application_id=? ORDER BY id DESC LIMIT 20', [req.params.id]),
@@ -385,7 +467,7 @@ router.get('/sessions', requireAdmin, async (req, res) => {
     try { return { ...record, accountId: decryptJson(JSON.parse(record.payload)).accountId ?? '—' }; } catch { return { ...record, accountId: '无法读取' }; }
   });
   const rows = sessions.map((session) => `<tr><td><strong>${esc(session.accountId)}</strong></td><td><code>${esc(session.id.slice(0, 12))}…</code></td><td>${formatTime(session.created_at)}</td><td>${formatTime(session.updated_at)}</td><td>${formatTime(session.expires_at)}</td><td><form method="post" action="${publicUrl('/admin/sessions/revoke')}">${csrf(req)}<input type="hidden" name="session_id" value="${esc(session.id)}"><button class="button danger small">注销会话</button></form></td></tr>`).join('');
-  res.send(adminPage(req, '登录会话', 'sessions', `<section class="table-panel"><div class="page-actions"><div><h2>统一认证会话</h2><p>这里注销的是认证中心会话；接入应用应使用标准注销代码同步清理自己的 Session。</p></div><span class="count">${sessions.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>UserID</th><th>会话</th><th>建立</th><th>最近活动</th><th>过期</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无有效会话</td></tr>'}</tbody></table></div></section>`, '会话查看、强制注销与统一退出'));
+  res.send(adminPage(req, '登录会话', 'sessions', `<section class="table-panel"><div class="page-actions"><div><h2>统一认证会话</h2><p>这里注销的是认证中心会话；接入应用应使用标准注销代码同步清理自己的 Session。</p></div><span class="count">${sessions.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>UserID</th><th>会话</th><th>建立</th><th>最近活动</th><th>过期</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无有效会话</td></tr>'}</tbody></table></div></section>`, '以下时间统一按北京时间（Asia/Shanghai）显示'));
 });
 router.post('/sessions/revoke', requireAdmin, body, requireCsrf, async (req, res) => {
   if (forbidUnless(req, res, ['super_admin', 'security_admin'])) return;
@@ -407,16 +489,17 @@ router.get('/audit', requireAdmin, async (req, res) => {
   if (forbidUnless(req, res, ['super_admin', 'security_admin', 'audit_viewer', 'application_admin'])) return;
   const [logs] = await pool.execute('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300');
   const rows = logs.map((log) => `<tr><td>${formatTime(log.created_at)}</td><td>${esc(log.event_type)}</td><td>${esc(log.actor_person_id ?? '系统')}</td><td>${esc(log.target_id ?? '—')}</td><td>${badge(log.result, log.result === 'success' ? 'success' : log.result === 'failure' ? 'danger' : 'warning')}</td><td><code>${esc(log.ip_address ?? '—')}</code></td></tr>`).join('');
-  res.send(adminPage(req, '登录与审计', 'audit', `<section class="card"><div class="card-header"><div><h2>最近 300 条事件</h2><p>登录、扫码、应用访问和管理操作</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>事件</th><th>人员</th><th>目标</th><th>结果</th><th>来源 IP</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无记录</td></tr>'}</tbody></table></div></section>`, '用于问题排查和安全追溯'));
+  res.send(adminPage(req, '登录与审计', 'audit', `<section class="card"><div class="card-header"><div><h2>最近 300 条事件</h2><p>登录、扫码、应用访问和管理操作</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>事件</th><th>人员</th><th>目标</th><th>结果</th><th>来源 IP</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无记录</td></tr>'}</tbody></table></div></section>`, '以下时间统一按北京时间（Asia/Shanghai）显示'));
 });
 
 router.get('/integration', requireAdmin, (req, res) => {
   const endpoints = [['Issuer', config.issuer], ['Discovery', `${config.issuer}/.well-known/openid-configuration`], ['Authorization', `${config.issuer}/auth`], ['Token', `${config.issuer}/token`], ['UserInfo', `${config.issuer}/me`], ['Logout', `${config.issuer}/session/end`], ['JWKS', `${config.issuer}/jwks`]];
   const rows = endpoints.map(([name, url]) => `<div class="endpoint-row"><span>${name}</span><code id="ep-${name}">${esc(url)}</code><button type="button" class="button ghost small" data-copy="#ep-${name}">复制</button></div>`).join('');
-  res.send(adminPage(req, '接入文档', 'integration', `<section class="table-panel"><div class="page-actions"><div><h2>OIDC 服务地址</h2><p>业务系统优先通过 Discovery 自动读取登录、令牌、用户信息和注销端点。</p></div><a class="button primary" href="${publicUrl('/admin/applications/new')}">打开接入向导</a></div><div class="endpoint-list">${rows}</div></section><section class="table-panel"><div class="page-actions"><div><h2>标准接入与验收</h2><p>向导已经生成所需代码，无需业务人员自己拼接协议参数。</p></div></div><div class="process-table"><div><strong>1. 登记服务</strong><span>业务首页、登录回调、退出返回、检测地址</span></div><div><strong>2. 复制文件</strong><span>守卫、回调、注销、健康检测、登录测试、注销测试</span></div><div><strong>3. 三项验收</strong><span>签名连通、真实认证、统一注销</span></div><div><strong>4. 权限与运行</strong><span>按人员/部门/职位授权，并持续查看监控和审计</span></div></div></section><section class="table-panel"><div class="page-actions"><div><h2>业务系统获得的身份</h2><p>统一认证负责身份与入口准入，业务内部权限仍由业务系统管理。</p></div></div><div class="claim-list"><code>sub</code><span>唯一 UserID（本企业为学号）</span><code>preferred_username</code><span>登录账号</span><code>name</code><span>姓名</span><code>department</code><span>当前部门</span><code>position</code><span>当前职位</span></div></section>`, '登录、注销、代码与测试集中说明'));
+  const example = `<?php\n// 必须放在业务页面第一行、任何 HTML 输出之前\nrequire_once __DIR__ . '/ESSO-DFSJ/login.php';\n\n$userId = $ssoUser['sub'];       // 唯一身份，等于企业微信 UserID\n$name = $ssoUser['name'];        // 姓名\n$department = $ssoUser['department'] ?? null;\n$position = $ssoUser['position'] ?? null;\n?>\n<a href="ESSO-DFSJ/logout.php">退出登录</a>`;
+  res.send(adminPage(req, '接入文档', 'integration', `<section class="table-panel"><div class="page-actions"><div><h2>先理解认证链路</h2><p>业务系统只接 ESSO-DFSJ；ESSO 再负责密码认证、企业微信扫码、人员状态和跨系统会话。</p></div><a class="button primary" href="${publicUrl('/admin/applications/new')}">生成接入包</a></div><div class="process-table"><div><strong>1. 业务系统发起 OIDC</strong><span>未登录页面跳到 ESSO，并携带 state、nonce 和 PKCE challenge</span></div><div><strong>2. ESSO 验证身份</strong><span>用户选择密码或企业微信扫码；业务系统永远拿不到统一密码</span></div><div><strong>3. 企业微信确认 UserID</strong><span>扫码回调先校验可信域名与 state，再用临时 code 换取企业成员 UserID</span></div><div><strong>4. ESSO 返回业务系统</strong><span>一次性授权码换令牌，UserInfo 返回 sub、姓名、部门和职位</span></div><div><strong>5. 业务建立本地 Session</strong><span>login.php 保存身份并返回原页面；logout.php 同时清理两层会话</span></div></div><p class="form-note">企业微信官方资料：<a href="https://developer.work.weixin.qq.com/document/path/91022" target="_blank" rel="noopener">网页授权登录</a>、<a href="https://developer.work.weixin.qq.com/document/path/98151" target="_blank" rel="noopener">扫码授权登录</a>。业务接入者不需要配置 CorpID、AgentID 或 CorpSecret，这些只由 ESSO 管理。</p></section><section class="table-panel"><div class="page-actions"><div><h2>最简部署流程</h2><p>固定目录名 ESSO-DFSJ，不能更名。</p></div></div><div class="process-table"><div><strong>1. 填项目根地址</strong><span>例如 http://210.47.163.114/qywx/YourProject/</span></div><div><strong>2. 下载 ESSO-DFSJ.zip</strong><span>解压后把完整文件夹放入项目根目录</span></div><div><strong>3. 引入 login.php</strong><span>保护页面并通过 $ssoUser 获取当前人员信息</span></div><div><strong>4. 运行三项测试</strong><span>健康连通、真实登录、真实注销全部通过</span></div><div><strong>5. 删除两个测试文件</strong><span>验收后删除 test-login.php、test-logout.php；health.php 保留监控</span></div></div>${codeBlock('integration-example', '业务页面完整调用示例', example)}</section><section class="table-panel"><div class="page-actions"><div><h2>ESSO-DFSJ 文件说明</h2><p>接入包已写好 Client ID、密钥和所有回调地址。</p></div></div><div class="claim-list"><code>config.php</code><span>基础配置和密钥，只允许服务端读取，不提交 Git</span><code>SsoClient.php</code><span>OIDC 协议、PKCE、令牌交换和 Session 客户端</span><code>login.php</code><span>登录保护及 $ssoUser 身份信息读取</span><code>callback.php</code><span>一次性授权码回调，由 ESSO 自动调用</span><code>logout.php</code><span>清理业务 Session 并注销统一认证</span><code>health.php</code><span>签名连通检测，生产环境长期保留</span><code>test-login.php</code><span>真实登录验收，通过后可删除</span><code>test-logout.php</code><span>真实注销验收，通过后可删除</span><code>README.txt</code><span>随包部署说明和最小调用实例</span></div></section><section class="table-panel"><div class="page-actions"><div><h2>专有名词解释</h2><p>先说明 ESSO/OIDC，再说明企业微信参数。</p></div></div><div class="claim-list"><code>ESSO</code><span>本系统 Enterprise Single Sign-On 的简称</span><code>SSO</code><span>一次登录，在有效会话期内访问多个获授权系统</span><code>OIDC</code><span>建立在 OAuth 2.0 上的身份认证协议</span><code>Issuer</code><span>身份签发方地址；这里是 ESSO 基础地址</span><code>Discovery</code><span>自动公布登录、令牌、用户信息、注销和公钥地址的配置文档</span><code>Client ID</code><span>接入业务系统的公开编号</span><code>Client Secret</code><span>业务服务端凭据，不得发给浏览器或写入 Git</span><code>Redirect URI</code><span>登录完成后允许返回的精确地址</span><code>Authorization Code</code><span>短时、一次性登录凭证，服务端用它换令牌</span><code>PKCE</code><span>绑定发起登录和交换授权码的一次性校验，防止授权码被截获后滥用</span><code>state</code><span>关联请求与回调并防止 CSRF</span><code>nonce</code><span>防止身份令牌被重复使用</span><code>Claim</code><span>认证返回的身份字段</span><code>sub</code><span>稳定唯一身份，本企业等于企业微信 UserID 和学号</span><code>Session</code><span>浏览器登录状态；ESSO 与每个业务系统各自保存一层</span><code>CorpID</code><span>企业微信企业编号</span><code>AgentID</code><span>企业微信自建应用编号</span><code>可信域名</code><span>企业微信允许 OAuth 回调的精确域名</span><code>code</code><span>企业微信扫码后返回的短时一次性凭证</span><code>access_token</code><span>ESSO 服务端调用企业微信接口的凭据，绝不返回业务系统或浏览器</span><code>UserID</code><span>企业内唯一成员标识，是本系统人员主键</span></div></section><section class="table-panel"><div class="page-actions"><div><h2>OIDC 服务地址</h2><p>SDK 通过 Discovery 自动读取，通常不需要手工填写下面各项。</p></div></div><div class="endpoint-list">${rows}</div></section>`, '技术原理、名词、接入包、调用实例和验收步骤'));
 });
 
-router.post('/terms', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; const starts = new Date(req.body.starts_at).toISOString(); const ends = new Date(req.body.ends_at).toISOString(); if (starts >= ends) throw new Error('开始时间必须早于结束时间'); const now = new Date().toISOString(); await pool.execute("INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES (?,?,?,?,'draft',?,?)", [req.body.id, req.body.name, starts, ends, now, now]); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });
+router.post('/terms', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; const starts = parseBeijingLocalTime(req.body.starts_at); const ends = parseBeijingLocalTime(req.body.ends_at); if (starts >= ends) throw new Error('开始时间必须早于结束时间'); const now = new Date().toISOString(); await pool.execute("INSERT INTO organization_terms(id,name,starts_at,ends_at,status,created_at,updated_at) VALUES (?,?,?,?,'draft',?,?)", [req.body.id, req.body.name, starts, ends, now, now]); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });
 router.post('/turnovers/start', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; await startTurnover(req.body.term_id, req.admin.person.id); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });
 router.post('/terms/:id/review', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; const [result] = await pool.execute("UPDATE organization_terms SET status='review',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'", [req.params.id]); if (!result.changes) throw new Error('只有草稿届次可以提交复核'); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });
 router.post('/terms/:id/publish', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'personnel_admin'])) return; await publishTerm(req.params.id, req.admin.person.id); res.redirect(publicUrl('/admin/terms')); } catch (error) { next(error); } });
