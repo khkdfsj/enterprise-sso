@@ -104,5 +104,5 @@ assert.equal(activatedNewcomer.status, 'active');
 assert.equal(activatedNewcomer.account_status, 'active');
 assert.equal(database.prepare('SELECT status FROM organization_terms WHERE id=?').get(scheduledTerm).status, 'active');
 
-console.log(JSON.stringify({ ok: true, resumable_steps: 5, promotions: ['委员→副部长', '副部长→部长'], nonselected: 'retired', permanent: 'carried', default_password: 'UserID last six digits and must change', scheduled_activation: 'keeps current roster until effective time' }, null, 2));
+console.log(JSON.stringify({ ok: true, resumable_steps: 5, promotions: ['委员→副部长', '副部长→部长'], nonselected: 'retired', permanent: 'carried', default_password: 'UserID last six digits with change-required flag', scheduled_activation: 'keeps current roster until effective time' }, null, 2));
 await pool.end();
