@@ -15,6 +15,7 @@ test('hosted login escapes application, username, and CSRF values', () => {
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /interaction%2Fone/);
   assert.match(html, /&lt;b&gt;bad&lt;\/b&gt;/);
+  assert.match(html, /assets\/login\.css\?v=0\.5\.5/);
 });
 
 test('QR page keeps browser secret in a POST body, not the status URL', () => {

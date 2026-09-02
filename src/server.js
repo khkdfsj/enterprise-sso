@@ -41,8 +41,8 @@ app.disable('x-powered-by');
 app.set('trust proxy', config.trustProxy);
 app.use(helmet({ contentSecurityPolicy: false, strictTransportSecurity: false }));
 router.use('/assets', express.static(path.resolve(here, '../public'), {
-  immutable: true,
-  maxAge: '1h',
+  immutable: false,
+  maxAge: 0,
   fallthrough: false,
 }));
 const formBody = express.urlencoded({ extended: false, limit: '32kb' });
