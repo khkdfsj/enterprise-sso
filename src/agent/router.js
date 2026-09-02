@@ -183,9 +183,9 @@ router.post('/api/v1/agent/services', json, async (req, res, next) => {
       const [duplicate] = await connection.execute('SELECT id FROM applications WHERE client_id=?', [clientId]);
       if (duplicate[0]) throw Object.assign(new Error('Client ID 已存在'), { code: 'client_id_exists', status: 409 });
       await connection.execute(
-        `INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?)`,
-        [id, clientId, values.name, secretHash, values.accessMode, values.provisioningEnabled ? 1 : 0, urls.projectRoot, urls.healthUri, now, now],
+        `INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_by,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?,?)`,
+        [id, clientId, values.name, secretHash, values.accessMode, values.provisioningEnabled ? 1 : 0, urls.projectRoot, urls.healthUri, req.agent.credential.created_by, now, now],
       );
       await connection.execute('INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,?)', [id, urls.redirectUri, now]);
       await connection.execute("INSERT INTO oidc_objects(model,id,payload,created_at,updated_at) VALUES ('Client',?,?,?,?)", [clientId, JSON.stringify(encryptJson(oidcPayload)), now, now]);

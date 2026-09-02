@@ -4,6 +4,7 @@ import { publicUrl } from '../public-url.js';
 import { SqliteOidcAdapter } from './sqlite-adapter.js';
 import { loadJwks } from './jwks.js';
 import { findAccountClaims } from '../repositories/accounts.js';
+import { oidcErrorPage, oidcLogoutPage, oidcPostLogoutPage } from '../views/html.js';
 
 export async function createProvider() {
   const jwks = await loadJwks();
@@ -47,7 +48,23 @@ export async function createProvider() {
       devInteractions: { enabled: false },
       introspection: { enabled: true },
       revocation: { enabled: true },
-      rpInitiatedLogout: { enabled: true },
+      rpInitiatedLogout: {
+        enabled: true,
+        async logoutSource(ctx, form) {
+          const appName = ctx.oidc.client?.clientName || ctx.oidc.client?.clientId;
+          ctx.type = 'html';
+          ctx.body = oidcLogoutPage({ appName, form });
+        },
+        async postLogoutSuccessSource(ctx) {
+          const appName = ctx.oidc.client?.clientName || ctx.oidc.client?.clientId;
+          ctx.type = 'html';
+          ctx.body = oidcPostLogoutPage(appName);
+        },
+      },
+    },
+    async renderError(ctx, out, error) {
+      ctx.type = 'html';
+      ctx.body = oidcErrorPage(out, error);
     },
     interactions: {
       policy,

@@ -1,6 +1,6 @@
 {
   "name": "enterprise-sso",
-  "version": "0.1.0",
+  "version": "0.5.4",
   "private": true,
   "type": "module",
   "description": "Enterprise OIDC SSO with password and WeCom QR authentication",

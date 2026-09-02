@@ -14,10 +14,9 @@ import { formatBeijingTime, parseBeijingLocalTime } from './time.js';
 
 const router = express.Router();
 const body = express.urlencoded({ extended: false, limit: '32kb' });
+const batchBody = express.urlencoded({ extended: false, limit: '128kb' });
 const ttlMs = 2 * 60 * 60 * 1000;
 const packageDownloads = new Map();
-const adminRoleNames = ['super_admin', 'security_admin', 'personnel_admin', 'application_admin', 'audit_viewer'];
-
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
@@ -54,12 +53,22 @@ function flowCookie(value, maxAge = 600) {
 function localEndpoint(path) {
   return `http://127.0.0.1:${config.port}${config.publicBasePath}${path}`;
 }
+function centralLogoutUrl() {
+  const url = new URL(`${config.issuer}/session/end`);
+  url.search = new URLSearchParams({ client_id: ADMIN_CLIENT_ID, post_logout_redirect_uri: adminLoggedOutUrl() }).toString();
+  return url.toString();
+}
+function accessDeniedPage(message) {
+  return loginPage('无权访问', `<p class="form-note">${esc(message)}</p><a class="button primary full" href="${esc(centralLogoutUrl())}">退出当前账号并切换账号</a>`);
+}
 async function requireAdmin(req, res, next) {
   const session = readSession(req);
   if (!session) return res.redirect(publicUrl('/admin/login'));
   const access = await loadAdminAccess(session.personId);
-  if (!access) return res.status(403).send(loginPage('无权访问', '<p class="form-note">当前账号不是部长、老师或后台管理员。</p>'));
-  req.admin = { ...session, person: access.person, roles: access.roles };
+  if (!access) {
+    return res.status(403).send(accessDeniedPage('当前账号没有有效任职或后台权限。'));
+  }
+  req.admin = { ...session, ...access };
   next();
 }
 function requireCsrf(req, res, next) {
@@ -67,35 +76,46 @@ function requireCsrf(req, res, next) {
   next();
 }
 function hasRole(req, roles) { return req.admin.roles.some((role) => roles.includes(role)); }
+function can(req, capability) { return Boolean(req.admin.capabilities?.[capability]); }
 function forbidUnless(req, res, roles) {
   if (hasRole(req, roles)) return false;
+  if (roles.includes('application_admin') && req.applicationAccess && canManageApplication(req, req.applicationAccess)) return false;
   res.status(403).send(adminPage(req, '无权操作', '', '<div class="empty">当前管理员没有执行此操作的权限。</div>'));
   return true;
 }
+function forbidCapability(req, res, capability, message = '当前账号没有执行此操作的权限。') {
+  if (can(req, capability)) return false;
+  res.status(403).send(adminPage(req, '无权操作', '', `<div class="empty">${esc(message)}</div>`));
+  return true;
+}
 function loginPage(title, content) {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)}</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-login-page"><main class="admin-login"><div class="admin-brand"><span>ID</span><strong>统一认证控制台</strong></div><section class="login-box"><h1>${esc(title)}</h1>${content}</section></main></body></html>`;
+  const success = /退出|成功|完成/.test(title);
+  const icon = success ? '<path d="M20 6 9 17l-5-5"/>' : '<path d="M12 9v4m0 4h.01"/><path d="M10.3 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/>';
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)} · ESSO-DFSJ</title><link rel="stylesheet" href="${publicUrl('/assets/login.css')}"></head><body class="auth-page auth-status"><div class="auth-shell"><aside class="auth-visual"><div class="visual-brand"><span class="brand-mark">ID</span><div><strong>ESSO-DFSJ</strong><small>部门统一身份认证</small></div></div><div class="visual-copy"><span class="visual-kicker">ESSO-DFSJ</span><h2>部门统一<br>身份认证</h2><div class="visual-notes" aria-label="编程知识点"><p class="visual-note note-one">清晰胜过聪明，简单胜过复杂。</p><p class="visual-note note-two">先让代码正确，再让它易于理解。</p><p class="visual-note note-three">可读性，是写给未来的一份文档。</p></div></div><div class="visual-foot">ESSO-DFSJ</div></aside><main class="auth-main"><div class="mobile-brand"><span class="brand-mark">ID</span><div><strong>ESSO-DFSJ</strong><small>部门统一身份认证</small></div></div><section class="auth-card"><div class="app-context"><span class="app-dot"></span><span>访问</span><strong>管理后台</strong></div><div class="status-hero ${success ? 'success' : 'warning'}"><div class="status-icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div><span class="status-kicker">${success ? '已完成' : '提示'}</span><h1>${esc(title)}</h1><div class="admin-status-content">${content}</div></div></section><footer>ESSO-DFSJ · 部门统一身份认证</footer></main></div></body></html>`;
 }
 const navGroups = [
   ['接入服务管理', [
-    ['applications', '/admin/applications', '服务纵览'],
-    ['application-new', '/admin/applications/new', '新增接入服务'],
-    ['monitoring', '/admin/monitoring', '连通与监控'],
+    ['applications', '/admin/applications', '服务纵览', 'serviceView'],
+    ['application-new', '/admin/applications/new', '新增接入服务', 'serviceCreate'],
+    ['monitoring', '/admin/monitoring', '连通与监控', 'serviceView'],
+    ['integration', '/admin/integration', '接入文档', 'serviceView'],
   ]],
   ['部门人员管理', [
-    ['people', '/admin/people', '人员与账号'],
-    ['organization', '/admin/organization', '部门与职位'],
-    ['terms', '/admin/terms', '届次换届'],
+    ['people', '/admin/people', '人员名单', 'peopleRead'],
+    ['organization', '/admin/organization', '部门与职位', 'organizationView'],
+    ['terms', '/admin/terms', '届次换届', 'turnoverManage'],
   ]],
   ['系统管理', [
-    ['overview', '/admin', '系统概览'],
-    ['sessions', '/admin/sessions', '登录会话'],
-    ['audit', '/admin/audit', '审计日志'],
-    ['integration', '/admin/integration', '接入文档'],
+    ['overview', '/admin', '系统概览', 'portal'],
+    ['sessions', '/admin/sessions', '登录会话', 'sessionView'],
+    ['audit', '/admin/audit', '审计日志', 'auditView'],
   ]],
 ];
 function adminPage(req, title, active, content, subtitle = '') {
   const csrf = esc(req.admin.csrf);
-  const nav = navGroups.map(([group, items]) => `<div class="nav-section"><div class="nav-title">${esc(group)}</div>${items.map(([key, href, label]) => `<a class="nav-item ${active === key ? 'active' : ''}" href="${publicUrl(href)}">${esc(label)}</a>`).join('')}</div>`).join('');
+  const nav = navGroups.map(([group, items]) => [group, items.filter(([, , , capability]) => can(req, capability))])
+    .filter(([, items]) => items.length)
+    .map(([group, items]) => `<div class="nav-section"><div class="nav-title">${esc(group)}</div>${items.map(([key, href, label]) => `<a class="nav-item ${active === key ? 'active' : ''}" href="${publicUrl(href)}">${esc(label)}</a>`).join('')}</div>`).join('');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${esc(title)} · 统一认证</title><link rel="stylesheet" href="${publicUrl('/assets/admin.css')}"></head><body class="admin-page"><aside class="sidebar"><a class="console-brand" href="${publicUrl('/admin')}"><span>ID</span><div>统一认证<small>管理控制台</small></div></a><nav>${nav}</nav><div class="sidebar-foot"><div><strong>${esc(req.admin.person.display_name)}</strong><small>${esc(req.admin.person.id)}</small></div><form method="post" action="${publicUrl('/admin/logout')}"><input type="hidden" name="csrf" value="${csrf}"><button class="link-button">退出全部系统</button></form></div></aside><div class="workspace"><header class="topbar"><div><h1>${esc(title)}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</div><span class="env-badge">生产环境</span></header><main class="content">${content}</main></div><script src="${publicUrl('/assets/admin.js')}" defer></script></body></html>`;
 }
 function csrf(req) { return `<input type="hidden" name="csrf" value="${esc(req.admin.csrf)}">`; }
@@ -169,31 +189,81 @@ function turnoverDeletePage(req, workflow, error = '') {
   return adminPage(req, '删除换届草稿', 'terms', `<div class="breadcrumb"><a href="${publicUrl('/admin/terms')}">届次换届</a><span>/</span><span>删除确认</span></div>${error ? `<div class="notice danger-notice"><strong>未删除草稿</strong><p>${esc(error)}</p></div>` : ''}<section class="table-panel danger-zone"><div class="page-actions"><div><h2>删除 ${esc(workflow.target_name)}</h2><p>将删除本次换届进度、已选留任名单、新增委员草稿和未发布的目标届次。当前生效届次、现有人员、账号和历史任职不会改变。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/delete`)}">${csrf(req)}<label class="span-2">输入目标届次名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(workflow.target_name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}`)}">取消</a><button class="button danger">确认删除草稿</button></div></form></section>`, '只有草稿可以删除，已发布届次不受影响');
 }
 function canManagePersonnel(req) {
-  return hasRole(req, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  return can(req, 'peopleManage');
 }
-async function canDeleteApplications(req) {
-  return hasRole(req, [...adminRoleNames, 'organization_leader', 'teacher']);
+function canRemovePeople(req) {
+  return can(req, 'peopleRemove');
+}
+function canManageTurnover(req) {
+  return can(req, 'turnoverManage');
+}
+function canManageApplication(req, application) {
+  return can(req, 'serviceManageAll') || application?.created_by === req.admin.person.id;
+}
+function requireServiceView(req, res, next) {
+  if (can(req, 'serviceView')) return next();
+  return res.status(403).send(adminPage(req, '无权访问', '', '<div class="empty">接入服务管理仅对平台管理员、老师、永久账户和运行部成员开放。</div>'));
+}
+async function requireApplicationManager(req, res, next) {
+  try {
+    if (!can(req, 'serviceView')) return res.status(403).send(adminPage(req, '无权访问', '', '<div class="empty">当前账号不能访问接入服务管理。</div>'));
+    const [rows] = await pool.execute('SELECT id,name,client_id,created_by FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
+    const application = rows[0];
+    if (!application) return res.sendStatus(404);
+    if (!canManageApplication(req, application)) return res.status(403).send(adminPage(req, '只读服务', 'applications', '<div class="empty">该服务不是由你创建的；只有创建者本人或平台管理员可以修改、测试和删除。</div>'));
+    req.managedApplication = application;
+    return next();
+  } catch (error) { return next(error); }
 }
 
 async function loadAdminAccess(personId) {
   const [[people], [roleRows], [appointments]] = await Promise.all([
-    pool.execute("SELECT id,display_name FROM people WHERE id=? AND status IN ('active','probation')", [personId]),
+    pool.execute("SELECT id,display_name,permanent_member FROM people WHERE id=? AND status IN ('active','probation')", [personId]),
     pool.execute(`SELECT role FROM system_role_assignments WHERE person_id=? AND status='active'
       AND role IN ('super_admin','security_admin','personnel_admin','application_admin','audit_viewer')
       AND (starts_at IS NULL OR starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       AND (ends_at IS NULL OR ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))`, [personId]),
-    pool.execute(`SELECT p.name,p.code,p.rank_order,
+    pool.execute(`SELECT p.name,p.code,p.rank_order,d.id department_id,d.name department_name,d.code department_code,
       CASE WHEN p.code IN ('teacher','advisor') OR p.name LIKE '%老师%' OR p.name LIKE '%教师%' THEN 1 ELSE 0 END is_teacher,
       CASE WHEN p.rank_order>=(SELECT COALESCE(MAX(rank_order),40) FROM positions WHERE code='minister' OR name='部长') THEN 1 ELSE 0 END is_leader
-      FROM appointments a JOIN positions p ON p.id=a.position_id
+      FROM appointments a JOIN positions p ON p.id=a.position_id JOIN departments d ON d.id=a.department_id
       WHERE a.person_id=? AND a.status='active' AND p.status='active'
         AND a.starts_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now') AND a.ends_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')`, [personId]),
   ]);
   if (!people[0]) return null;
   const roles = [...new Set(roleRows.map((row) => row.role))];
-  if (appointments.some((item) => item.is_teacher)) roles.push('teacher');
-  if (appointments.some((item) => item.is_leader)) roles.push('organization_leader');
-  return roles.length ? { person: people[0], roles } : null;
+  const platformAdmin = roles.includes('super_admin');
+  const teacher = appointments.some((item) => item.is_teacher);
+  const permanent = Boolean(people[0].permanent_member);
+  const maxRank = Math.max(0, ...appointments.map((item) => Number(item.rank_order) || 0));
+  const viceOrAbove = maxRank >= 30;
+  const leaderOrAbove = maxRank >= 40;
+  const operationsMember = appointments.some((item) => item.department_name === '运行部');
+  if (teacher) roles.push('teacher');
+  if (leaderOrAbove) roles.push('organization_leader');
+  if (viceOrAbove) roles.push('organization_vice_leader');
+  if (appointments.length) roles.push('organization_member');
+  if (operationsMember) roles.push('operations_member');
+  if (permanent) roles.push('permanent_account');
+  const capabilities = {
+    portal: platformAdmin || permanent || teacher || appointments.length > 0 || roles.length > 0,
+    serviceView: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
+    serviceCreate: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
+    serviceManageAll: platformAdmin,
+    agentCredentialManage: platformAdmin,
+    peopleRead: true,
+    peopleManage: platformAdmin || permanent || teacher || viceOrAbove || roles.includes('personnel_admin'),
+    peopleRemove: platformAdmin || permanent || teacher || leaderOrAbove || roles.includes('personnel_admin'),
+    organizationView: platformAdmin || permanent || teacher || viceOrAbove || roles.includes('personnel_admin'),
+    turnoverManage: platformAdmin || permanent || teacher || viceOrAbove || roles.includes('personnel_admin'),
+    sessionView: platformAdmin || permanent || teacher || roles.includes('security_admin'),
+    sessionManage: platformAdmin || roles.includes('security_admin'),
+    auditView: platformAdmin || permanent || teacher || roles.includes('security_admin') || roles.includes('audit_viewer'),
+    privilegeGrant: platformAdmin || permanent || teacher,
+    systemMetrics: platformAdmin || permanent || teacher,
+  };
+  if (!capabilities.portal) return null;
+  return { person: people[0], roles: [...new Set(roles)], capabilities, profile: { appointments, maxRank, operationsMember, platformAdmin, permanent, teacher } };
 }
 
 router.get('/login', (req, res) => {
@@ -238,21 +308,34 @@ router.get('/callback', async (req, res, next) => {
     if (!userResponse.ok) throw new Error('统一认证身份读取失败');
     const user = await userResponse.json();
     const access = await loadAdminAccess(user.sub);
-    if (!access) return res.status(403).send(loginPage('无权访问', '<p class="form-note">此账号已完成统一认证，但不是部长、老师或后台管理员。</p>'));
+    if (!access) {
+      res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0)]);
+      return res.status(403).send(accessDeniedPage('此账号已完成统一认证，但没有有效任职或平台权限。'));
+    }
     res.setHeader('Set-Cookie', [cookie(makeSession(user.sub)), flowCookie('', 0)]);
     await audit(req, 'admin_oidc_login', 'success', { actorPersonId: user.sub, targetType: 'application', targetId: ADMIN_CLIENT_ID });
     return res.redirect(publicUrl('/admin'));
   } catch (error) { return next(error); }
 });
-router.get('/logged-out', (_req, res) => res.send(loginPage('已安全退出', `<p class="login-subtitle">业务后台会话和统一认证会话均已结束。</p><a class="button primary full" href="${publicUrl('/admin/login')}">重新登录</a>`)));
+router.get('/logged-out', (_req, res) => {
+  res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0)]);
+  res.send(loginPage('已退出', `<p class="login-subtitle">你可以使用其他账号重新登录。</p><a class="button primary full" href="${publicUrl('/admin/login')}">重新登录</a>`));
+});
 router.post('/logout', requireAdmin, body, requireCsrf, (req, res) => {
-  const url = new URL(`${config.issuer}/session/end`);
-  url.search = new URLSearchParams({ client_id: ADMIN_CLIENT_ID, post_logout_redirect_uri: adminLoggedOutUrl() }).toString();
   res.setHeader('Set-Cookie', cookie('', 0));
-  res.redirect(303, url.toString());
+  res.redirect(303, centralLogoutUrl());
 });
 
 router.get('/', requireAdmin, async (req, res) => {
+  if (!can(req, 'systemMetrics')) {
+    const appointments = req.admin.profile.appointments.map((item) => `${item.department_name} · ${item.name}`).join('、') || '暂无部门任职';
+    const shortcuts = [
+      `<a class="button primary" href="${publicUrl('/admin/people')}">查看人员名单</a>`,
+      can(req, 'turnoverManage') ? `<a class="button secondary" href="${publicUrl('/admin/terms')}">届次换届</a>` : '',
+      can(req, 'serviceView') ? `<a class="button secondary" href="${publicUrl('/admin/applications')}">接入服务管理</a>` : '',
+    ].filter(Boolean).join('');
+    return res.send(adminPage(req, '系统概览', 'overview', `<section class="table-panel"><div class="page-actions"><div><h2>${esc(req.admin.person.display_name)}，欢迎使用统一认证管理平台</h2><p>平台身份：普通用户；部门任职：${esc(appointments)}</p></div>${req.admin.profile.operationsMember ? badge('运行部','info') : ''}</div><div class="dashboard-actions">${shortcuts}</div><div class="notice"><strong>权限说明</strong><p>页面和操作会依据平台身份、部门、职位及服务创建者动态显示；未显示的功能不能通过手工输入地址绕过。</p></div></section>`, '按当前身份显示可用功能'));
+  }
   const [[people], [apps], [events], [sessions], [recentApps], [recentEvents]] = await Promise.all([
     pool.execute("SELECT COUNT(*) total,SUM(status IN ('active','probation')) available,SUM(permanent_member=1) permanent FROM people"),
     pool.execute("SELECT COUNT(*) total,SUM(status='active') active,SUM(provisioning_enabled=1) provisioning FROM applications WHERE client_id<>?", [ADMIN_CLIENT_ID]),
@@ -268,22 +351,36 @@ router.get('/', requireAdmin, async (req, res) => {
   res.send(adminPage(req, '系统概览', 'overview', `<div class="metric-strip">${metrics}</div><div class="dashboard-actions"><a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a><a class="button secondary" href="${publicUrl('/admin/people')}">管理人员</a><a class="button secondary" href="${publicUrl('/admin/sessions')}">查看会话</a></div><div class="split-tables"><section class="table-panel"><div class="page-actions"><div><h2>最近服务</h2><p>统一认证接入状态</p></div><a class="button ghost small" href="${publicUrl('/admin/applications')}">全部服务</a></div><div class="table-wrap"><table><thead><tr><th>应用</th><th>访问策略</th><th>状态</th><th>更新</th></tr></thead><tbody>${appRows || '<tr><td colspan="4" class="empty-cell">暂无应用</td></tr>'}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>最近认证事件</h2><p>成功、失败与拒绝记录</p></div><a class="button ghost small" href="${publicUrl('/admin/audit')}">全部日志</a></div><div class="table-wrap"><table><thead><tr><th>事件</th><th>主体</th><th>结果</th><th>时间</th></tr></thead><tbody>${eventRows || '<tr><td colspan="4" class="empty-cell">暂无事件</td></tr>'}</tbody></table></div></section></div>`, '认证、服务与人员运行状态'));
 });
 
-router.get('/applications', requireAdmin, async (req, res) => {
+router.use('/applications/:id', requireAdmin, async (req, res, next) => {
+  if (req.params.id === 'new') return next();
+  if (!can(req, 'serviceView')) return res.status(403).send(adminPage(req, '无权访问', '', '<div class="empty">当前账号不能查看接入服务。</div>'));
+  const [apps] = await pool.execute('SELECT * FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
+  const app = apps[0];
+  if (!app) return res.sendStatus(404);
+  req.applicationAccess = app;
+  const managementGet = /\/(?:delete|package|onboarding|verify-login|verify-logout)$/.test(req.path);
+  if ((req.method !== 'GET' || managementGet) && !canManageApplication(req, app)) {
+    return res.status(403).send(adminPage(req, '只读服务', 'applications', '<div class="empty">只有服务创建者本人或平台管理员可以修改、检测或删除该服务。</div>'));
+  }
+  return next();
+});
+
+router.get('/applications', requireAdmin, requireServiceView, async (req, res) => {
   const [apps] = await pool.execute(`SELECT a.*,COUNT(DISTINCT r.id) redirect_count,COUNT(DISTINCT ar.id) rule_count FROM applications a LEFT JOIN application_redirect_uris r ON r.application_id=a.id LEFT JOIN application_access_rules ar ON ar.application_id=a.id WHERE a.client_id<>? GROUP BY a.id ORDER BY a.name`, [ADMIN_CLIENT_ID]);
-  const canDelete = await canDeleteApplications(req);
-  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.home_url ? `<a href="${esc(app.home_url)}" target="_blank" rel="noopener">打开网站</a>` : '—'}</td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('异常', 'danger') : badge('未检测', 'muted')}</td><td>${statusBadge(app.status)}</td><td><div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">管理</a><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/onboarding?step=3`)}">测试</a>${canDelete ? `<a class="button danger small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">删除</a>` : ''}</div></td></tr>`).join('');
-  const addButton = hasRole(req, ['super_admin', 'application_admin']) ? `<a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a>` : '';
+  const rows = apps.map((app) => { const manageable = canManageApplication(req, app); return `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}${app.created_by === req.admin.person.id ? ' · 我创建' : ''}</small></td><td>${app.access_mode === 'all_active' ? '全部有效人员' : `规则授权（${app.rule_count} 条）`}</td><td>${app.home_url ? `<a href="${esc(app.home_url)}" target="_blank" rel="noopener">打开网站</a>` : '—'}</td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('异常', 'danger') : badge('未检测', 'muted')}</td><td>${statusBadge(app.status)}</td><td><div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${manageable ? '管理' : '查看'}</a>${manageable ? `<a class="button ghost small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/onboarding?step=3`)}">测试</a><a class="button danger small" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">删除</a>` : ''}</div></td></tr>`; }).join('');
+  const addButton = can(req, 'serviceCreate') ? `<a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a>` : '';
   res.send(adminPage(req, '服务纵览', 'applications', `<section class="table-panel"><div class="page-actions"><div><h2>接入服务</h2><p>集中管理网站、认证端点、权限与连通状态</p></div>${addButton}</div><div class="table-wrap"><table><thead><tr><th>服务</th><th>访问范围</th><th>业务入口</th><th>连通状态</th><th>启用状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">尚未接入服务</td></tr>'}</tbody></table></div></section>`, '表格纵览与集中操作'));
 });
 
 router.get('/applications/new', requireAdmin, (req, res) => {
-  if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
-  res.send(adminPage(req, '新增接入服务', 'application-new', `<section class="table-panel"><div class="page-actions"><div><h2>让 AI Agent 自动完成接入</h2><p>Agent 可按标准 Skill 登记服务、下载同一个 ESSO-DFSJ 包并执行三项验收。</p></div><div class="action-row"><a class="button secondary" href="${publicUrl('/admin/agent-access')}">管理 Agent 凭据</a><a class="button ghost" href="https://github.com/khkdfsj/enterprise-sso/tree/main/skills/enterprise-sso-integration" target="_blank" rel="noopener">查看 Agent Skill，让 AI 协助快速接入</a></div></div></section>${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记项目基本信息</h2><p>只填写项目根地址，系统自动生成回调、注销、健康检查和测试地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">项目访问根地址<input name="project_root_url" type="url" placeholder="http://210.47.163.114/qywx/YourProject/" required><small>填写浏览器访问地址，不是服务器磁盘路径；地址必须以项目根目录结尾。</small></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">登记并生成 ESSO-DFSJ 接入包</button></div></form></section>`, '手动向导或 Agent Skill 均生成相同的标准接入包'));
+  if (forbidCapability(req, res, 'serviceCreate')) return;
+  const credentialButton = can(req, 'agentCredentialManage') ? `<a class="button secondary" href="${publicUrl('/admin/agent-access')}">管理 Agent 凭据</a>` : '';
+  res.send(adminPage(req, '新增接入服务', 'application-new', `<section class="table-panel"><div class="page-actions"><div><h2>让 AI Agent 自动完成接入</h2><p>Agent 可按标准 Skill 登记服务、下载同一个 ESSO-DFSJ 包并执行三项验收。</p></div><div class="action-row">${credentialButton}<a class="button ghost" href="https://github.com/khkdfsj/enterprise-sso/tree/main/skills/enterprise-sso-integration" target="_blank" rel="noopener">查看 Agent Skill，让 AI 协助快速接入</a></div></div></section>${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记项目基本信息</h2><p>只填写项目根地址，系统自动生成回调、注销、健康检查和测试地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">项目访问根地址<input name="project_root_url" type="url" placeholder="http://210.47.163.114/qywx/YourProject/" required><small>填写浏览器访问地址，不是服务器磁盘路径；地址必须以项目根目录结尾。</small></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">登记并生成 ESSO-DFSJ 接入包</button></div></form></section>`, '手动向导或 Agent Skill 均生成相同的标准接入包'));
 });
 
 router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+    if (forbidCapability(req, res, 'serviceCreate')) return;
     const name = String(req.body.name ?? '').trim();
     const clientId = String(req.body.client_id ?? '').trim() || `app_${randomToken(12)}`;
     const homeUrl = projectRootUrl(req.body.project_root_url);
@@ -295,7 +392,7 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     const verificationLogoutUri = `${config.issuer}/api/v1/integration-tests/${encodeURIComponent(id)}/logout`;
     const clientPayload = { client_id: clientId, client_secret: secret, client_name: name, redirect_uris: [redirectUri], post_logout_redirect_uris: [logoutUri, verificationLogoutUri], response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256' };
     await withTransaction(async (connection) => {
-      await connection.execute("INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?)", [id, clientId, name, hash, accessMode, req.body.provisioning_enabled === '1' ? 1 : 0, homeUrl, healthUri, now, now]);
+      await connection.execute("INSERT INTO applications(id,client_id,name,client_secret_hash,access_mode,provisioning_enabled,status,home_url,health_check_url,integration_status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,'active',?,?,'configuring',?,?,?)", [id, clientId, name, hash, accessMode, req.body.provisioning_enabled === '1' ? 1 : 0, homeUrl, healthUri, req.admin.person.id, now, now]);
       await connection.execute('INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,?)', [id, redirectUri, now]);
       await connection.execute("INSERT INTO oidc_objects(model,id,payload,created_at,updated_at) VALUES ('Client',?,?,?,?)", [clientId, JSON.stringify(encryptJson(clientPayload)), now, now]);
     });
@@ -309,8 +406,7 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
   } catch (error) { next(error); }
 });
 
-router.get('/applications/:id/package/:token', requireAdmin, async (req, res) => {
-  if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
+router.get('/applications/:id/package/:token', requireAdmin, requireApplicationManager, async (req, res) => {
   const item = packageDownloads.get(req.params.token);
   if (!item || item.appId !== req.params.id || item.expires <= Date.now()) return res.status(410).send(adminPage(req, '下载已失效', 'application-new', '<div class="empty">接入包只在创建后短时间内提供。请删除未完成的测试服务并重新登记。</div>'));
   packageDownloads.delete(req.params.token);
@@ -321,7 +417,7 @@ router.get('/applications/:id/package/:token', requireAdmin, async (req, res) =>
 });
 
 router.get('/agent-access', requireAdmin, async (req, res) => {
-  if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权操作', 'application-new', '<div class="empty">只有部长以上、老师或后台管理员可以管理 Agent 凭据。</div>'));
+  if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
   const [credentials] = await pool.execute(`SELECT c.*,p.display_name creator_name,
     (SELECT COUNT(*) FROM agent_service_registrations r WHERE r.credential_id=c.id) service_count
     FROM agent_api_credentials c LEFT JOIN people p ON p.id=c.created_by ORDER BY c.created_at DESC`);
@@ -331,7 +427,7 @@ router.get('/agent-access', requireAdmin, async (req, res) => {
 
 router.post('/agent-access', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (!(await canDeleteApplications(req))) return res.sendStatus(403);
+    if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
     const displayName = String(req.body.display_name ?? '').trim();
     const identity = String(req.body.agent_identity ?? '').trim();
     const days = Number(req.body.valid_days);
@@ -348,31 +444,29 @@ router.post('/agent-access', requireAdmin, body, requireCsrf, async (req, res, n
 
 router.post('/agent-access/:id/revoke', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (!(await canDeleteApplications(req))) return res.sendStatus(403);
+    if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
     await pool.execute("UPDATE agent_api_credentials SET status='revoked',revoked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='active'", [req.params.id]);
     await audit(req, 'agent_credential_revoke', 'success', { actorPersonId: req.admin.person.id, targetType: 'agent_credential', targetId: req.params.id });
     return res.redirect(publicUrl('/admin/agent-access'));
   } catch (error) { return next(error); }
 });
 
-router.post('/applications/:id/monitor/start', requireAdmin, body, requireCsrf, async (req, res, next) => {
+router.post('/applications/:id/monitor/start', requireAdmin, requireApplicationManager, body, requireCsrf, async (req, res, next) => {
   try {
-    if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
     const until = new Date(Date.now() + 10 * 60_000).toISOString();
     await pool.execute("UPDATE applications SET monitor_until=?,integration_status='testing',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [until, req.params.id]);
     await checkApplicationConnectivity(req.params.id);
     return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
   } catch (error) { return next(error); }
 });
-router.post('/applications/:id/check', requireAdmin, body, requireCsrf, async (req, res, next) => {
+router.post('/applications/:id/check', requireAdmin, requireApplicationManager, body, requireCsrf, async (req, res, next) => {
   try {
-    if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return;
     await checkApplicationConnectivity(req.params.id);
     const back = req.body.return_to === 'monitoring' ? '/admin/monitoring' : `/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`;
     return res.redirect(publicUrl(back));
   } catch (error) { return next(error); }
 });
-router.get('/applications/:id/verify-login', requireAdmin, async (req, res, next) => {
+router.get('/applications/:id/verify-login', requireAdmin, requireApplicationManager, async (req, res, next) => {
   try {
     const sub = String(req.query.sub ?? '');
     const timestamp = Number(req.query.ts);
@@ -387,11 +481,11 @@ router.get('/applications/:id/verify-login', requireAdmin, async (req, res, next
     return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
   } catch (error) { return next(error); }
 });
-router.get('/applications/:id/verify-logout', requireAdmin, async (req, res) => {
+router.get('/applications/:id/verify-logout', requireAdmin, requireApplicationManager, async (req, res) => {
   await pool.execute("UPDATE applications SET logout_test_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [req.params.id]);
   return res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}/onboarding?step=3`));
 });
-router.get('/applications/:id/onboarding', requireAdmin, async (req, res) => {
+router.get('/applications/:id/onboarding', requireAdmin, requireApplicationManager, async (req, res) => {
   const [[apps], [checks]] = await Promise.all([
     pool.execute("SELECT * FROM applications WHERE id=? AND client_id<>?", [req.params.id, ADMIN_CLIENT_ID]),
     pool.execute('SELECT * FROM application_connectivity_checks WHERE application_id=? ORDER BY id DESC LIMIT 10', [req.params.id]),
@@ -410,23 +504,19 @@ router.get('/applications/:id/onboarding', requireAdmin, async (req, res) => {
   res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(success ? 4 : 3)}<section class="wizard-panel"><div class="wizard-heading"><span>${success ? '第四步' : '第三步'}</span><h2>${success ? '接入验收全部通过' : '逐项完成接入验收'}</h2><p>${success ? '基础连通、真实认证和统一注销均已通过。' : '系统会自动检测基础连通；登录和注销需要点击按钮完成一次真实用户流程。'}</p></div><div class="table-wrap verification-table"><table><thead><tr><th>验收项目</th><th>状态</th><th>结果与操作说明</th></tr></thead><tbody>${testRows}</tbody></table></div><div class="wizard-actions">${next}</div><details class="check-history"><summary>查看基础连通检测历史</summary><div class="table-wrap"><table><thead><tr><th>检测时间</th><th>结果</th><th>HTTP</th><th>耗时</th><th>说明</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty-cell">等待首次检测</td></tr>'}</tbody></table></div></details></section>`, '认证、注销和连通性都提供代码与真实测试'));
 });
 
-router.get('/monitoring', requireAdmin, async (req, res) => {
+router.get('/monitoring', requireAdmin, requireServiceView, async (req, res) => {
   const [apps] = await pool.execute("SELECT * FROM applications WHERE client_id<>? ORDER BY last_check_status,last_check_at DESC", [ADMIN_CLIENT_ID]);
-  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td><code>${esc(app.health_check_url ?? '未配置')}</code></td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('失败', 'danger') : badge('未检测', 'muted')}</td><td>${app.last_check_http_status ?? '—'}</td><td>${formatTime(app.last_check_at)}</td><td><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<input type="hidden" name="return_to" value="monitoring"><button class="button ghost small" ${app.health_check_url ? '' : 'disabled'}>立即检测</button></form></td></tr>`).join('');
+  const rows = apps.map((app) => `<tr><td><a class="table-link" href="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}`)}">${esc(app.name)}</a><small>${esc(app.client_id)}</small></td><td><code>${esc(app.health_check_url ?? '未配置')}</code></td><td>${app.last_check_status === 'success' ? badge('连通', 'success') : app.last_check_status === 'failure' ? badge('失败', 'danger') : badge('未检测', 'muted')}</td><td>${app.last_check_http_status ?? '—'}</td><td>${formatTime(app.last_check_at)}</td><td>${canManageApplication(req, app) ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<input type="hidden" name="return_to" value="monitoring"><button class="button ghost small" ${app.health_check_url ? '' : 'disabled'}>立即检测</button></form>` : badge('只读', 'muted')}</td></tr>`).join('');
   res.send(adminPage(req, '连通与监控', 'monitoring', `<section class="table-panel"><div class="page-actions"><div><h2>服务连通状态</h2><p>接入向导启动后持续检测十分钟，历史结果保留用于排障。</p></div></div><div class="table-wrap"><table><thead><tr><th>服务</th><th>检测地址</th><th>状态</th><th>HTTP</th><th>最近检测</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无服务</td></tr>'}</tbody></table></div></section>`, '集中查看业务系统可达性'));
 });
 
-router.get('/applications/:id/delete', requireAdmin, async (req, res) => {
-  if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有当前部长及以上职级、老师或后台管理员可以删除接入服务。</div>'));
-  const [apps] = await pool.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
-  const app = apps[0];
-  if (!app) return res.sendStatus(404);
-  res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '部长、老师和管理员删除权限与二次确认'));
+router.get('/applications/:id/delete', requireAdmin, requireApplicationManager, async (req, res) => {
+  const app = req.managedApplication;
+  res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '只有服务创建者本人或平台管理员可以删除'));
 });
 
-router.post('/applications/:id/delete', requireAdmin, body, requireCsrf, async (req, res, next) => {
+router.post('/applications/:id/delete', requireAdmin, requireApplicationManager, body, requireCsrf, async (req, res, next) => {
   try {
-    if (!(await canDeleteApplications(req))) return res.status(403).send(adminPage(req, '无权删除', 'applications', '<div class="empty">只有当前部长及以上职级、老师或后台管理员可以删除接入服务。</div>'));
     let app;
     await withTransaction(async (connection) => {
       const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]);
@@ -441,13 +531,13 @@ router.post('/applications/:id/delete', requireAdmin, body, requireCsrf, async (
   } catch (error) { return next(error); }
 });
 
-router.get('/applications/:id', requireAdmin, async (req, res) => {
+router.get('/applications/:id', requireAdmin, requireServiceView, async (req, res) => {
   const [[apps], [redirects], [rules], [departments], [positions], [clients], [checks]] = await Promise.all([
     pool.execute('SELECT * FROM applications WHERE id=? AND client_id<>?', [req.params.id, ADMIN_CLIENT_ID]), pool.execute('SELECT * FROM application_redirect_uris WHERE application_id=? ORDER BY id', [req.params.id]), pool.execute('SELECT * FROM application_access_rules WHERE application_id=? ORDER BY id DESC', [req.params.id]), pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"), pool.execute("SELECT id,name FROM positions WHERE status='active' ORDER BY rank_order DESC,name"), pool.execute("SELECT payload FROM oidc_objects WHERE model='Client' AND id=(SELECT client_id FROM applications WHERE id=?)", [req.params.id]), pool.execute('SELECT * FROM application_connectivity_checks WHERE application_id=? ORDER BY id DESC LIMIT 20', [req.params.id]),
   ]);
   const app = apps[0]; if (!app) return res.sendStatus(404);
   const client = clients[0] ? decryptJson(JSON.parse(clients[0].payload)) : {};
-  const canEdit = hasRole(req, ['super_admin', 'application_admin']);
+  const canEdit = canManageApplication(req, app);
   const redirectRows = redirects.map((item) => `<li><code>${esc(item.redirect_uri)}</code>${canEdit && redirects.length > 1 ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/redirects/remove`)}">${csrf(req)}<input type="hidden" name="redirect_id" value="${item.id}"><button class="icon-button danger-text" title="移除">×</button></form>` : ''}</li>`).join('');
   const ruleRows = rules.map((rule) => `<tr><td>${rule.effect === 'allow' ? badge('允许', 'success') : badge('拒绝', 'danger')}</td><td>${{ person: '人员', department: '部门', position: '职位' }[rule.subject_type]}</td><td><code>${esc(rule.subject_id)}</code></td><td>${formatTime(rule.starts_at)} — ${formatTime(rule.ends_at)}</td><td>${canEdit ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/rules/remove`)}">${csrf(req)}<input type="hidden" name="rule_id" value="${rule.id}"><button class="button ghost small">移除</button></form>` : ''}</td></tr>`).join('');
   const subjectOptions = `<optgroup label="人员"><option value="person:">输入 UserID 后提交</option></optgroup><optgroup label="部门">${departments.map((d) => `<option value="department:${esc(d.id)}">${esc(d.name)}</option>`).join('')}</optgroup><optgroup label="职位">${positions.map((p) => `<option value="position:${esc(p.id)}">${esc(p.name)}</option>`).join('')}</optgroup>`;
@@ -463,7 +553,7 @@ router.get('/applications/:id', requireAdmin, async (req, res) => {
     endpoints: `<section class="table-panel"><div class="page-actions"><div><h2>登录回调地址</h2><p>OIDC 登录只允许精确匹配。</p></div><span class="count">${redirects.length} 个</span></div><ul class="uri-list">${redirectRows}</ul>${addRedirect}<div class="endpoint-divider"><strong>退出后返回地址</strong><p>业务系统清理本地 Session 后，应跳转统一认证的 end_session_endpoint。</p>${(client.post_logout_redirect_uris ?? []).map((uri) => `<code class="endpoint-code">${esc(uri)}</code>`).join('') || '<span>未配置</span>'}</div></section>`,
     access: `<section class="table-panel"><div class="page-actions"><div><h2>访问规则</h2><p>拒绝优先，可按人员、部门或职位授权。</p></div><span class="count">${rules.length} 条</span></div>${addRule}<div class="table-wrap"><table><thead><tr><th>效果</th><th>主体类型</th><th>主体</th><th>有效时间</th><th>操作</th></tr></thead><tbody>${ruleRows || '<tr><td colspan="5" class="empty-cell">暂无规则；规则模式下，无允许规则即无法访问</td></tr>'}</tbody></table></div></section>`,
     security: secretSettings,
-    monitor: `<section class="table-panel"><div class="page-actions"><div><h2>连通监控</h2><p>${esc(app.health_check_url ?? '未配置检测地址')}</p></div><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<button class="button primary">立即检测</button></form></div><div class="table-wrap"><table><thead><tr><th>检测时间</th><th>结果</th><th>HTTP</th><th>耗时</th><th>说明</th></tr></thead><tbody>${checkRows || '<tr><td colspan="5" class="empty-cell">暂无检测记录</td></tr>'}</tbody></table></div></section>`,
+    monitor: `<section class="table-panel"><div class="page-actions"><div><h2>连通监控</h2><p>${esc(app.health_check_url ?? '未配置检测地址')}</p></div>${canEdit ? `<form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/check`)}">${csrf(req)}<button class="button primary">立即检测</button></form>` : badge('只读', 'muted')}</div><div class="table-wrap"><table><thead><tr><th>检测时间</th><th>结果</th><th>HTTP</th><th>耗时</th><th>说明</th></tr></thead><tbody>${checkRows || '<tr><td colspan="5" class="empty-cell">暂无检测记录</td></tr>'}</tbody></table></div></section>`,
   }[tab];
   res.send(adminPage(req, app.name, 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span>${esc(app.name)}</div><div class="service-header"><div><h2>${esc(app.name)}</h2><code>${esc(app.client_id)}</code></div><div>${statusBadge(app.status)} ${app.access_mode === 'all_active' ? badge('全部有效人员') : badge('按规则授权', 'warning')}</div></div><nav class="subtabs">${tabs}</nav>${tabContent}`, `接入服务管理`));
 });
@@ -490,14 +580,16 @@ router.get('/people', requireAdmin, async (req, res) => {
     ORDER BY p.permanent_member DESC,pos.rank_order DESC,p.grade_year,p.id LIMIT 500`, params);
   const grades = [...new Set(people.map((p) => p.grade_year).filter(Boolean))].sort((a, b) => b - a);
   const canEdit = canManagePersonnel(req);
-  const rows = people.map((p) => `<tr><td><strong>${esc(p.display_name)}</strong><small>${esc(p.id)}</small></td><td>${esc(p.department)}<small>${esc(p.position)}</small></td><td>${esc(p.grade_year ?? '—')}</td><td>${statusBadge(p.status)} ${statusBadge(p.account_status ?? 'pending')} ${p.permanent_member ? badge('永久', 'info') : ''}</td><td>${formatTime(p.last_login_at)}</td><td>${canEdit ? `<div class="action-row"><a class="button ghost small" href="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/edit?term=${encodeURIComponent(selectedTerm)}`)}">编辑</a><form method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/reset-password`)}">${csrf(req)}<input type="hidden" name="term" value="${esc(selectedTerm)}"><button class="button ghost small">重置密码</button></form>${p.permanent_member || p.id === req.admin.person.id ? '' : `<a class="button danger small" href="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/remove?term=${encodeURIComponent(selectedTerm)}`)}">移除</a>`}</div>` : ''}</td></tr>`).join('');
+  const canRemove = canRemovePeople(req);
+  const canGrant = can(req, 'privilegeGrant');
+  const rows = people.map((p) => `<tr><td><strong>${esc(p.display_name)}</strong><small>${esc(p.id)}</small></td><td>${esc(p.department)}<small>${esc(p.position)}</small></td><td>${esc(p.grade_year ?? '—')}</td><td>${statusBadge(p.status)} ${statusBadge(p.account_status ?? 'pending')} ${p.permanent_member ? badge('永久', 'info') : ''}</td><td>${formatTime(p.last_login_at)}</td><td>${canEdit || canGrant ? `<div class="action-row">${canEdit ? `<a class="button ghost small" href="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/edit?term=${encodeURIComponent(selectedTerm)}`)}">编辑</a><form method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/reset-password`)}">${csrf(req)}<input type="hidden" name="term" value="${esc(selectedTerm)}"><button class="button ghost small">重置密码</button></form>` : ''}${canGrant ? `<a class="button ghost small" href="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/platform-access?term=${encodeURIComponent(selectedTerm)}`)}">平台身份</a>` : ''}${canRemove && !p.permanent_member && p.id !== req.admin.person.id ? `<a class="button danger small" href="${publicUrl(`/admin/people/${encodeURIComponent(p.id)}/remove?term=${encodeURIComponent(selectedTerm)}`)}">移除</a>` : ''}</div>` : badge('只读', 'muted')}</td></tr>`).join('');
   const termOptions = terms.map((term) => `<option value="${esc(term.id)}" ${term.id === selectedTerm ? 'selected' : ''}>${esc(term.name)}（${esc(statusBadgeText(term.status))}）</option>`).join('');
   const gradeOptions = grades.map((year) => `<option value="${year}" ${grade === year ? 'selected' : ''}>${year} 级</option>`).join('');
-  res.send(adminPage(req, '人员与账号', 'people', `<section class="table-panel"><div class="page-actions"><div><h2>统一人员目录</h2><p>按届次查看当前或历史组织名单；页面只显示中文管理状态。</p></div>${canEdit ? `<a class="button primary" href="${publicUrl(`/admin/people/new?term=${encodeURIComponent(selectedTerm)}`)}">新增人员</a>` : ''}</div><form class="filter-bar" method="get"><label>组织届次<select name="term">${termOptions}</select></label><label>年级<select name="grade"><option value="">全部年级</option>${gradeOptions}</select></label><button class="button secondary">查询</button></form><div class="table-wrap"><table><thead><tr><th>人员</th><th>部门 / 职位</th><th>年级</th><th>人员 / 账号状态</th><th>最近登录</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">该届次没有符合条件的人员</td></tr>'}</tbody></table></div></section>`, `UserID 是唯一主键；当前显示 ${people.length} 人`));
+  res.send(adminPage(req, '人员与账号', 'people', `<section class="table-panel"><div class="page-actions"><div><h2>统一人员目录</h2><p>按届次查看当前或历史组织名单；平台身份与部门职位彼此独立。</p></div>${canEdit ? `<div class="action-row"><a class="button secondary" href="${publicUrl(`/admin/people/batch?term=${encodeURIComponent(selectedTerm)}`)}">批量新增委员</a><a class="button primary" href="${publicUrl(`/admin/people/new?term=${encodeURIComponent(selectedTerm)}`)}">新增人员</a></div>` : ''}</div><form class="filter-bar" method="get"><label>组织届次<select name="term">${termOptions}</select></label><label>年级<select name="grade"><option value="">全部年级</option>${gradeOptions}</select></label><button class="button secondary">查询</button></form><div class="table-wrap"><table><thead><tr><th>人员</th><th>部门 / 职位</th><th>年级</th><th>人员 / 账号状态</th><th>最近登录</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">该届次没有符合条件的人员</td></tr>'}</tbody></table></div></section>`, `UserID 是唯一主键；当前显示 ${people.length} 人`));
 });
 
 router.get('/people/new', requireAdmin, async (req, res) => {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleManage')) return;
   const selectedTerm = String(req.query.term ?? '');
   const [[terms], [departments], [positions]] = await Promise.all([
     pool.execute("SELECT id,name,status FROM organization_terms WHERE status IN ('active','draft','review','scheduled') ORDER BY starts_at DESC"),
@@ -508,7 +600,7 @@ router.get('/people/new', requireAdmin, async (req, res) => {
 });
 
 router.post('/people', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleManage')) return;
   const userId = String(req.body.user_id ?? '').trim();
   const name = String(req.body.display_name ?? '').trim();
   const grade = Number(req.body.grade_year);
@@ -534,8 +626,96 @@ router.post('/people', requireAdmin, body, requireCsrf, async (req, res, next) =
   res.redirect(publicUrl(`/admin/people?term=${encodeURIComponent(req.body.term_id)}`));
 } catch (error) { next(error); } });
 
+router.get('/people/batch', requireAdmin, async (req, res) => {
+  if (forbidCapability(req, res, 'peopleManage')) return;
+  const selectedTerm = String(req.query.term ?? '');
+  const [[terms], [departments]] = await Promise.all([
+    pool.execute("SELECT id,name,status FROM organization_terms WHERE status IN ('active','draft','review','scheduled') ORDER BY starts_at DESC"),
+    pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"),
+  ]);
+  res.send(adminPage(req, '批量新增委员', 'people', `<div class="breadcrumb"><a href="${publicUrl(`/admin/people?term=${encodeURIComponent(selectedTerm)}`)}">人员与账号</a><span>/</span><span>批量新增委员</span></div><section class="table-panel"><div class="page-actions"><div><h2>向已建届次批量加入委员</h2><p>所有导入人员的职位固定为“委员”；已有账号保留原密码，新账号默认密码为学号后六位。</p></div></div><form class="form-grid" method="post" action="${publicUrl('/admin/people/batch')}">${csrf(req)}<label>组织届次<select name="term_id">${terms.map((t) => `<option value="${esc(t.id)}" ${t.id === selectedTerm ? 'selected' : ''}>${esc(t.name)}（${esc(statusBadgeText(t.status))}）</option>`).join('')}</select></label><label>新委员年级<input name="grade_year" type="number" min="2000" max="2200" value="${new Date().getFullYear()}" required></label><label>默认部门<select name="default_department_id">${departments.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('')}</select></label><label class="span-2">委员名单<textarea name="batch" rows="12" placeholder="每行：学号,姓名,部门名称（部门可省略）&#10;例如：2026123456,张三,运行部&#10;2026123457,李四" required></textarea><small>支持英文逗号、中文逗号或 Tab；最多 300 人。整批校验通过后才会写入，避免半批数据。</small></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/people?term=${encodeURIComponent(selectedTerm)}`)}">取消</a><button class="button primary">校验并批量入库</button></div></form></section>`, '适用于已经创建完成的任意当前或待发布届次'));
+});
+
+router.post('/people/batch', requireAdmin, batchBody, requireCsrf, async (req, res, next) => { try {
+  if (forbidCapability(req, res, 'peopleManage')) return;
+  const grade = Number(req.body.grade_year);
+  const lines = String(req.body.batch ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!Number.isInteger(grade) || grade < 2000 || grade > 2200) throw new Error('新委员年级不正确');
+  if (!lines.length || lines.length > 300) throw new Error('名单应包含 1 至 300 人');
+  const [[terms], [departments], [positions]] = await Promise.all([
+    pool.execute("SELECT * FROM organization_terms WHERE id=? AND status IN ('active','draft','review','scheduled')", [req.body.term_id]),
+    pool.execute("SELECT id,name,code FROM departments WHERE status='active'"),
+    pool.execute("SELECT id FROM positions WHERE status='active' AND (code='member' OR name='委员') ORDER BY CASE WHEN code='member' THEN 0 ELSE 1 END LIMIT 1"),
+  ]);
+  const term = terms[0]; const memberPosition = positions[0];
+  if (!term || !memberPosition) throw new Error('届次不可用或系统未配置委员职位');
+  const byDepartment = new Map(departments.flatMap((item) => [[item.id, item.id], [item.name, item.id], [item.code, item.id]]));
+  if (!byDepartment.has(String(req.body.default_department_id))) throw new Error('默认部门无效');
+  const seen = new Set();
+  const members = lines.map((line, index) => {
+    const [userId = '', displayName = '', department = ''] = line.split(/[\t,，]+/).map((item) => item.trim());
+    if (!/^\d{6,120}$/.test(userId) || !displayName || displayName.length > 160) throw new Error(`第 ${index + 1} 行学号或姓名格式不正确`);
+    if (seen.has(userId)) throw new Error(`名单中学号 ${userId} 重复`);
+    seen.add(userId);
+    const departmentId = department ? byDepartment.get(department) : String(req.body.default_department_id);
+    if (!departmentId) throw new Error(`第 ${index + 1} 行部门“${department}”不存在`);
+    return { userId, displayName, departmentId };
+  });
+  const passwordHashes = new Map(await Promise.all(members.map(async (item) => [item.userId, await hashPassword(item.userId.slice(-6))])));
+  const now = new Date().toISOString();
+  await withTransaction(async (connection) => {
+    for (const item of members) {
+      const [existingAppointments] = await connection.execute('SELECT id FROM appointments WHERE person_id=? AND term_id=? LIMIT 1', [item.userId, term.id]);
+      if (existingAppointments[0]) throw new Error(`${item.userId} 已在该届次名单中`);
+      const [existingPeople] = await connection.execute('SELECT id FROM people WHERE id=?', [item.userId]);
+      if (existingPeople[0]) {
+        await connection.execute("UPDATE people SET display_name=?,grade_year=?,status='active',authorization_version=authorization_version+1,updated_at=? WHERE id=?", [item.displayName, grade, now, item.userId]);
+        await connection.execute("UPDATE accounts SET status='active',updated_at=? WHERE person_id=?", [now, item.userId]);
+      } else {
+        const accountId = randomUUID();
+        await connection.execute("INSERT INTO people(id,employee_no,display_name,status,grade_year,permanent_member,source_system,created_at,updated_at) VALUES (?,?,?,'active',?,0,'admin_batch',?,?)", [item.userId, item.userId, item.displayName, grade, now, now]);
+        await connection.execute("INSERT INTO accounts(id,person_id,username,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)", [accountId, item.userId, item.userId, now, now]);
+        await connection.execute('INSERT INTO password_credentials(account_id,password_hash,must_change_password,changed_at) VALUES (?,?,1,?)', [accountId, passwordHashes.get(item.userId), now]);
+        if (config.wecom.corpId) await connection.execute("INSERT OR IGNORE INTO wecom_identities(person_id,corp_id,wecom_userid,status,bound_at) VALUES (?,?,?,'active',?)", [item.userId, config.wecom.corpId, item.userId, now]);
+      }
+      const appointmentStatus = term.status === 'active' ? 'active' : term.status === 'scheduled' ? 'scheduled' : 'pending';
+      await connection.execute("INSERT INTO appointments(id,person_id,term_id,department_id,position_id,is_primary,starts_at,ends_at,status,approved_by,approved_at,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?)", [randomUUID(), item.userId, term.id, item.departmentId, memberPosition.id, term.starts_at, term.ends_at, appointmentStatus, req.admin.person.id, now, now, now]);
+    }
+  });
+  await audit(req, 'person_batch_create', 'success', { actorPersonId: req.admin.person.id, targetType: 'organization_term', targetId: term.id, detail: { count: members.length, grade_year: grade } });
+  return res.redirect(publicUrl(`/admin/people?term=${encodeURIComponent(term.id)}&batch_added=${members.length}`));
+} catch (error) { next(error); } });
+
+router.get('/people/:id/platform-access', requireAdmin, async (req, res) => {
+  if (forbidCapability(req, res, 'privilegeGrant', '只有平台管理员、老师或永久账户可以授予平台身份。')) return;
+  const [[people], [roles]] = await Promise.all([
+    pool.execute('SELECT id,display_name,permanent_member FROM people WHERE id=?', [req.params.id]),
+    pool.execute("SELECT status FROM system_role_assignments WHERE person_id=? AND role='super_admin'", [req.params.id]),
+  ]);
+  const person = people[0]; if (!person) return res.sendStatus(404);
+  const isAdmin = roles[0]?.status === 'active';
+  res.send(adminPage(req, '平台身份', 'people', `<div class="breadcrumb"><a href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">人员与账号</a><span>/</span><span>平台身份</span></div><section class="table-panel"><div class="page-actions"><div><h2>${esc(person.display_name)} · ${esc(person.id)}</h2><p>平台身份与部长、副部长、委员等部门职务完全独立。</p></div>${isAdmin ? badge('平台管理员','info') : badge('普通平台用户','muted')}</div><div class="notice"><strong>权限规则</strong><p>平台管理员拥有全部后台权限并跳过部门职务限制；普通平台用户继续按照老师、永久账户、所属部门和当前职位获得权限。</p></div><form class="form-grid" method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(person.id)}/platform-access`)}">${csrf(req)}<input type="hidden" name="term" value="${esc(req.query.term ?? '')}"><label>平台身份<select name="platform_identity"><option value="user" ${isAdmin ? '' : 'selected'}>普通平台用户</option><option value="admin" ${isAdmin ? 'selected' : ''}>平台管理员</option></select></label><label>账户有效期<select name="permanent_member"><option value="0" ${person.permanent_member ? '' : 'selected'}>按人员状态和届次</option><option value="1" ${person.permanent_member ? 'selected' : ''}>永久账户</option></select></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">取消</a><button class="button primary">保存平台权限</button></div></form></section>`, '平台角色和组织职位分开管理'));
+});
+
+router.post('/people/:id/platform-access', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
+  if (forbidCapability(req, res, 'privilegeGrant', '只有平台管理员、老师或永久账户可以授予平台身份。')) return;
+  if (req.params.id === req.admin.person.id) throw new Error('为避免当前账号锁死，不能在这里修改自己的平台身份或永久状态');
+  const makeAdmin = req.body.platform_identity === 'admin';
+  const makePermanent = req.body.permanent_member === '1';
+  if (!['user','admin'].includes(req.body.platform_identity) || !['0','1'].includes(req.body.permanent_member)) return res.sendStatus(400);
+  const now = new Date().toISOString();
+  await withTransaction(async (connection) => {
+    const [people] = await connection.execute('SELECT id FROM people WHERE id=?', [req.params.id]);
+    if (!people[0]) throw new Error('人员不存在');
+    await connection.execute('UPDATE people SET permanent_member=?,authorization_version=authorization_version+1,updated_at=? WHERE id=?', [makePermanent ? 1 : 0, now, req.params.id]);
+    await connection.execute(`INSERT INTO system_role_assignments(person_id,role,status,granted_by,starts_at,ends_at,created_at) VALUES (?,'super_admin',?,?,?,NULL,?) ON CONFLICT(person_id,role) DO UPDATE SET status=excluded.status,granted_by=excluded.granted_by,starts_at=excluded.starts_at,ends_at=NULL`, [req.params.id, makeAdmin ? 'active' : 'disabled', req.admin.person.id, now, now]);
+  });
+  await audit(req, 'person_platform_access_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'person', targetId: req.params.id, detail: { platform_identity: makeAdmin ? 'admin' : 'user', permanent_member: makePermanent } });
+  return res.redirect(publicUrl(`/admin/people?term=${encodeURIComponent(req.body.term ?? '')}`));
+} catch (error) { next(error); } });
+
 router.get('/people/:id/edit', requireAdmin, async (req, res) => {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleManage')) return;
   const termId = String(req.query.term ?? '');
   const [[people], [departments], [positions]] = await Promise.all([
     pool.execute(`SELECT p.*,a.status account_status,ap.department_id,ap.position_id,t.name term_name FROM people p LEFT JOIN accounts a ON a.person_id=p.id LEFT JOIN appointments ap ON ap.person_id=p.id AND ap.term_id=? LEFT JOIN organization_terms t ON t.id=ap.term_id WHERE p.id=? LIMIT 1`, [termId, req.params.id]),
@@ -549,7 +729,7 @@ router.get('/people/:id/edit', requireAdmin, async (req, res) => {
 });
 
 router.post('/people/:id/edit', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleManage')) return;
   const allowed = new Set(['active','probation','retired','left','graduated','dismissed']);
   const name = String(req.body.display_name ?? '').trim();
   const grade = Number(req.body.grade_year);
@@ -566,7 +746,7 @@ router.post('/people/:id/edit', requireAdmin, body, requireCsrf, async (req, res
 } catch (error) { next(error); } });
 
 router.post('/people/:id/reset-password', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleManage')) return;
   if (!/^\d{6,120}$/.test(req.params.id)) throw new Error('该 UserID 不能自动生成后六位密码');
   const passwordHash = await hashPassword(req.params.id.slice(-6));
   await withTransaction(async (connection) => {
@@ -580,7 +760,7 @@ router.post('/people/:id/reset-password', requireAdmin, body, requireCsrf, async
 } catch (error) { next(error); } });
 
 router.get('/people/:id/remove', requireAdmin, async (req, res) => {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleRemove', '只有部长及以上、老师、永久账户或平台管理员可以移除人员。')) return;
   const [rows] = await pool.execute('SELECT id,display_name,permanent_member FROM people WHERE id=?', [req.params.id]);
   const person = rows[0];
   if (!person) return res.sendStatus(404);
@@ -589,7 +769,7 @@ router.get('/people/:id/remove', requireAdmin, async (req, res) => {
 });
 
 router.post('/people/:id/remove', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'peopleRemove', '只有部长及以上、老师、永久账户或平台管理员可以移除人员。')) return;
   if (req.body.confirm_id !== req.params.id || req.params.id === req.admin.person.id) return res.sendStatus(400);
   await withTransaction(async (connection) => {
     const [people] = await connection.execute('SELECT permanent_member FROM people WHERE id=?', [req.params.id]);
@@ -603,6 +783,7 @@ router.post('/people/:id/remove', requireAdmin, body, requireCsrf, async (req, r
 } catch (error) { next(error); } });
 
 router.get('/organization', requireAdmin, async (req, res) => {
+  if (forbidCapability(req, res, 'organizationView')) return;
   const [[departments], [positions]] = await Promise.all([
     pool.execute(`SELECT d.id,d.name,d.status,COUNT(DISTINCT ap.person_id) member_count FROM departments d LEFT JOIN appointments ap ON ap.department_id=d.id AND ap.status='active' GROUP BY d.id ORDER BY d.name`),
     pool.execute(`SELECT p.id,p.name,p.rank_order,p.status,COUNT(DISTINCT ap.person_id) member_count FROM positions p LEFT JOIN appointments ap ON ap.position_id=p.id AND ap.status='active' GROUP BY p.id ORDER BY p.rank_order DESC,p.name`),
@@ -613,7 +794,7 @@ router.get('/organization', requireAdmin, async (req, res) => {
 });
 
 router.get('/sessions', requireAdmin, async (req, res) => {
-  if (forbidUnless(req, res, ['super_admin', 'security_admin'])) return;
+  if (forbidCapability(req, res, 'sessionView')) return;
   const [records] = await pool.execute("SELECT id,payload,created_at,updated_at,expires_at FROM oidc_objects WHERE model='Session' ORDER BY updated_at DESC LIMIT 200");
   const sessions = records.map((record) => {
     try { return { ...record, accountId: decryptJson(JSON.parse(record.payload)).accountId ?? '—' }; } catch { return { ...record, accountId: '无法读取' }; }
@@ -622,13 +803,14 @@ router.get('/sessions', requireAdmin, async (req, res) => {
   res.send(adminPage(req, '登录会话', 'sessions', `<section class="table-panel"><div class="page-actions"><div><h2>统一认证会话</h2><p>这里注销的是认证中心会话；接入应用应使用标准注销代码同步清理自己的 Session。</p></div><span class="count">${sessions.length} 条</span></div><div class="table-wrap"><table><thead><tr><th>UserID</th><th>会话</th><th>建立</th><th>最近活动</th><th>过期</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无有效会话</td></tr>'}</tbody></table></div></section>`, '以下时间统一按北京时间（Asia/Shanghai）显示'));
 });
 router.post('/sessions/revoke', requireAdmin, body, requireCsrf, async (req, res) => {
-  if (forbidUnless(req, res, ['super_admin', 'security_admin'])) return;
+  if (forbidCapability(req, res, 'sessionManage')) return;
   await pool.execute("DELETE FROM oidc_objects WHERE model='Session' AND id=?", [req.body.session_id]);
   await audit(req, 'session_revoke', 'success', { actorPersonId: req.admin.person.id, targetType: 'session', targetId: String(req.body.session_id).slice(0, 80) });
   res.redirect(publicUrl('/admin/sessions'));
 });
 
 router.get('/terms', requireAdmin, async (req, res) => {
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [[terms], [workflows]] = await Promise.all([
     pool.execute('SELECT * FROM organization_terms ORDER BY starts_at DESC LIMIT 30'),
     pool.execute(`SELECT w.*,s.name source_name,t.name target_name,(SELECT COUNT(*) FROM turnover_workflow_members m WHERE m.workflow_id=w.id) member_count FROM turnover_workflows w JOIN organization_terms s ON s.id=w.source_term_id JOIN organization_terms t ON t.id=w.target_term_id ORDER BY w.updated_at DESC LIMIT 30`),
@@ -643,7 +825,7 @@ router.get('/terms', requireAdmin, async (req, res) => {
 });
 
 router.get('/turnovers/new', requireAdmin, async (req, res) => {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [terms] = await pool.execute("SELECT * FROM organization_terms WHERE status='active' ORDER BY starts_at DESC");
   const year = new Date().getFullYear();
   const source = terms[0];
@@ -659,7 +841,7 @@ router.get('/turnovers/new', requireAdmin, async (req, res) => {
 });
 
 router.post('/turnovers', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const grade = Number(req.body.target_grade_year);
   const startsAt = parseBeijingLocalTime(req.body.starts_at);
   const endsAt = parseBeijingLocalTime(req.body.ends_at);
@@ -678,6 +860,7 @@ router.post('/turnovers', requireAdmin, body, requireCsrf, async (req, res, next
 } });
 
 router.get('/turnovers/:id', requireAdmin, async (req, res) => {
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [[workflows], [departments], [positions]] = await Promise.all([
     pool.execute(`SELECT w.*,s.name source_name,t.name target_name,t.starts_at,t.ends_at FROM turnover_workflows w JOIN organization_terms s ON s.id=w.source_term_id JOIN organization_terms t ON t.id=w.target_term_id WHERE w.id=?`, [req.params.id]),
     pool.execute("SELECT id,name FROM departments WHERE status='active' ORDER BY name"),
@@ -709,12 +892,12 @@ router.get('/turnovers/:id', requireAdmin, async (req, res) => {
       content = `<section class="wizard-panel"><div class="wizard-heading"><span>第五步</span><h2>核对并发布 ${esc(workflow.target_name)}</h2><p>发布后，未留任人员自动卸任；永久用户自动保留；新委员生成后六位初始密码。</p></div><div class="notice">共 ${members.length} 名普通人员。永久用户会在发布时自动加入，不计入此数字。</div><div class="table-wrap"><table><thead><tr><th>人员</th><th>处理方式</th><th>年级</th><th>部门</th><th>职位</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty-cell">名单为空，不能发布</td></tr>'}</tbody></table></div><form method="post" action="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/publish`)}">${csrf(req)}<div class="wizard-actions separated"><a class="button ghost" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}?step=4`)}">返回新增委员</a><button class="button primary" ${members.length ? '' : 'disabled'}>确认发布新届</button></div></form></section>`;
     }
   }
-  const draftActions = canManagePersonnel(req) ? `<section class="table-panel"><div class="page-actions"><div><h2>草稿操作</h2><p>不再办理本次换届时，可以删除全部草稿进度；当前届次不会受影响。</p></div><a class="button danger" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/delete`)}">删除草稿</a></div></section>` : '';
+  const draftActions = canManageTurnover(req) ? `<section class="table-panel"><div class="page-actions"><div><h2>草稿操作</h2><p>不再办理本次换届时，可以删除全部草稿进度；当前届次不会受影响。</p></div><a class="button danger" href="${publicUrl(`/admin/turnovers/${encodeURIComponent(workflow.id)}/delete`)}">删除草稿</a></div></section>` : '';
   res.send(adminPage(req, `换届：${workflow.target_name}`, 'terms', `${turnoverSteps(step)}${content}${draftActions}`, `草稿自动保存 · 当前第 ${step} 步`));
 });
 
 router.get('/turnovers/:id/delete', requireAdmin, async (req, res) => {
-  if (!canManagePersonnel(req)) return res.status(403).send(adminPage(req, '无权删除', 'terms', '<div class="empty">只有部长、老师和管理员可以删除换届草稿。</div>'));
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [rows] = await pool.execute(`SELECT w.id,w.target_term_id,t.name target_name FROM turnover_workflows w JOIN organization_terms t ON t.id=w.target_term_id WHERE w.id=? AND w.status='draft'`, [req.params.id]);
   const workflow = rows[0];
   if (!workflow) return res.status(404).send(adminPage(req, '草稿不存在', 'terms', '<div class="empty">该换届草稿不存在或已经发布，不能删除。</div>'));
@@ -723,7 +906,7 @@ router.get('/turnovers/:id/delete', requireAdmin, async (req, res) => {
 
 router.post('/turnovers/:id/delete', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (!canManagePersonnel(req)) return res.status(403).send(adminPage(req, '无权删除', 'terms', '<div class="empty">只有部长、老师和管理员可以删除换届草稿。</div>'));
+    if (forbidCapability(req, res, 'turnoverManage')) return;
     const [rows] = await pool.execute(`SELECT w.id,w.target_term_id,t.name target_name FROM turnover_workflows w JOIN organization_terms t ON t.id=w.target_term_id WHERE w.id=? AND w.status='draft'`, [req.params.id]);
     const workflow = rows[0];
     if (!workflow) return res.status(404).send(adminPage(req, '草稿不存在', 'terms', '<div class="empty">该换届草稿不存在或已经发布，不能删除。</div>'));
@@ -740,28 +923,28 @@ router.post('/turnovers/:id/delete', requireAdmin, body, requireCsrf, async (req
 });
 
 router.post('/turnovers/:id/retained', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const ids = Array.isArray(req.body.person_ids) ? req.body.person_ids : req.body.person_ids ? [req.body.person_ids] : [];
   await saveRetainedMembers(req.params.id, ids.map(String));
   res.redirect(publicUrl(`/admin/turnovers/${encodeURIComponent(req.params.id)}?step=3`));
 } catch (error) { next(error); } });
 
 router.post('/turnovers/:id/members/:memberId', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [result] = await pool.execute(`UPDATE turnover_workflow_members SET department_id=?,proposed_position_id=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND workflow_id=?`, [req.body.department_id, req.body.position_id, req.params.memberId, req.params.id]);
   if (!result.changes) throw new Error('待调整人员不存在');
   res.redirect(publicUrl(`/admin/turnovers/${encodeURIComponent(req.params.id)}?step=3`));
 } catch (error) { next(error); } });
 
 router.post('/turnovers/:id/members/:memberId/remove', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   await pool.execute('DELETE FROM turnover_workflow_members WHERE id=? AND workflow_id=?', [req.params.memberId, req.params.id]);
   const step = String(req.get('referer') ?? '').includes('step=4') ? 4 : 3;
   res.redirect(publicUrl(`/admin/turnovers/${encodeURIComponent(req.params.id)}?step=${step}`));
 } catch (error) { next(error); } });
 
 router.post('/turnovers/:id/new-members', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const [departments] = await pool.execute("SELECT id,name,code FROM departments WHERE status='active'");
   const byKey = new Map(departments.flatMap((d) => [[d.id,d.id],[d.name,d.id],[d.code,d.id]]));
   const members = [];
@@ -776,27 +959,27 @@ router.post('/turnovers/:id/new-members', requireAdmin, body, requireCsrf, async
 } catch (error) { next(error); } });
 
 router.post('/turnovers/:id/step', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const step = Math.max(1, Math.min(5, Number(req.body.step)));
   await pool.execute(`UPDATE turnover_workflows SET current_step=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'`, [step, req.params.id]);
   res.redirect(publicUrl(`/admin/turnovers/${encodeURIComponent(req.params.id)}?step=${step}`));
 } catch (error) { next(error); } });
 
 router.post('/turnovers/:id/publish', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
-  if (!canManagePersonnel(req)) return forbidUnless(req, res, ['super_admin', 'personnel_admin', 'organization_leader', 'teacher']);
+  if (forbidCapability(req, res, 'turnoverManage')) return;
   const result = await publishTurnoverWorkflow(req.params.id, req.admin.person.id);
   await audit(req, 'turnover_workflow_publish', 'success', { actorPersonId: req.admin.person.id, targetType: 'organization_term', targetId: result.termId });
   res.redirect(publicUrl(`/admin/people?term=${encodeURIComponent(result.termId)}`));
 } catch (error) { next(error); } });
 
 router.get('/audit', requireAdmin, async (req, res) => {
-  if (forbidUnless(req, res, ['super_admin', 'security_admin', 'audit_viewer', 'application_admin'])) return;
+  if (forbidCapability(req, res, 'auditView')) return;
   const [logs] = await pool.execute('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300');
   const rows = logs.map((log) => `<tr><td>${formatTime(log.created_at)}</td><td>${esc(log.event_type)}</td><td>${esc(log.actor_person_id ?? '系统')}</td><td>${esc(log.target_id ?? '—')}</td><td>${badge(log.result, log.result === 'success' ? 'success' : log.result === 'failure' ? 'danger' : 'warning')}</td><td><code>${esc(log.ip_address ?? '—')}</code></td></tr>`).join('');
   res.send(adminPage(req, '登录与审计', 'audit', `<section class="card"><div class="card-header"><div><h2>最近 300 条事件</h2><p>登录、扫码、应用访问和管理操作</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>事件</th><th>人员</th><th>目标</th><th>结果</th><th>来源 IP</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无记录</td></tr>'}</tbody></table></div></section>`, '以下时间统一按北京时间（Asia/Shanghai）显示'));
 });
 
-router.get('/integration', requireAdmin, (req, res) => {
+router.get('/integration', requireAdmin, requireServiceView, (req, res) => {
   const endpoints = [['Issuer', config.issuer], ['Discovery', `${config.issuer}/.well-known/openid-configuration`], ['Authorization', `${config.issuer}/auth`], ['Token', `${config.issuer}/token`], ['UserInfo', `${config.issuer}/me`], ['Logout', `${config.issuer}/session/end`], ['JWKS', `${config.issuer}/jwks`]];
   const rows = endpoints.map(([name, url]) => `<div class="endpoint-row"><span>${name}</span><code id="ep-${name}">${esc(url)}</code><button type="button" class="button ghost small" data-copy="#ep-${name}">复制</button></div>`).join('');
   const example = `<?php\n// 必须放在业务页面第一行、任何 HTML 输出之前\nrequire_once __DIR__ . '/ESSO-DFSJ/login.php';\n\n$userId = $ssoUser['sub'];       // 唯一身份，等于企业微信 UserID\n$name = $ssoUser['name'];        // 姓名\n$department = $ssoUser['department'] ?? null;\n$position = $ssoUser['position'] ?? null;\n?>\n<a href="ESSO-DFSJ/logout.php">退出登录</a>`;

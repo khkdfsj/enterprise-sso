@@ -60,7 +60,7 @@ let response = await request(auth);
 let current = nextUrl(auth, response);
 response = await request(current);
 const loginHtml = await response.text();
-if (response.status !== 200 || !loginHtml.includes('企业统一身份认证')) throw new Error('Hosted login page was not rendered');
+if (response.status !== 200 || !loginHtml.includes('部门统一身份认证')) throw new Error('Hosted login page was not rendered');
 const csrf = loginHtml.match(/name="csrf" value="([^"]+)"/)?.[1];
 if (!csrf) throw new Error('Hosted login did not contain CSRF token');
 const interaction = new URL(current);

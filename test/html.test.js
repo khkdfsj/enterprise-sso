@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loginPage, messagePage, qrPage } from '../src/views/html.js';
+import { loginPage, messagePage, oidcErrorPage, oidcLogoutPage, oidcPostLogoutPage, qrPage } from '../src/views/html.js';
 import { publicUrl } from '../src/public-url.js';
 
 test('hosted login escapes application, username, and CSRF values', () => {
@@ -37,5 +37,15 @@ test('message page escapes API error text', () => {
 test('hosted login hides QR entry until WeCom credentials are complete', () => {
   const html = loginPage({ uid: 'uid', appName: 'Demo', csrf: 'csrf', wecomEnabled: false });
   assert.doesNotMatch(html, /wecom\/start/);
-  assert.match(html, /请输入统一认证账号和密码/);
+  assert.match(html, /请输入账号和密码/);
+});
+
+test('OIDC logout, logged-out, and warning pages use the branded modern shell', () => {
+  const logout = oidcLogoutPage({ appName: 'Demo', form: '<form id="op.logoutForm"></form>' });
+  assert.match(logout, /确认退出？/);
+  assert.match(logout, /form="op.logoutForm"/);
+  assert.match(logout, /auth-visual/);
+  assert.match(oidcPostLogoutPage('Demo'), /已退出/);
+  assert.match(oidcErrorPage({ error: 'access_denied', error_description: 'No <script>x<\/script>' }), /无权访问此应用/);
+  assert.doesNotMatch(oidcErrorPage({ error_description: '<script>x<\/script>' }), /<script>x<\/script>/);
 });

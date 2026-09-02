@@ -57,7 +57,7 @@ current = nextUrl(current, response);
 response = await request(current);
 const hostedLogin = await response.text();
 assert.equal(response.status, 200);
-assert.match(hostedLogin, /企业统一身份认证/);
+assert.match(hostedLogin, /部门统一身份认证/);
 const loginCsrf = hostedLogin.match(/name="csrf" value="([^"]+)"/)?.[1];
 assert.ok(loginCsrf);
 const passwordUrl = `${new URL(current).origin}${new URL(current).pathname}/password`;
@@ -195,8 +195,14 @@ try {
   database.prepare("INSERT INTO appointments(id,person_id,term_id,department_id,position_id,is_primary,starts_at,ends_at,status,created_at,updated_at) VALUES (?,'dev-admin','ci-delete-term','ci-delete-dept','ci-minister',1,?,?,'active',?,?)").run(randomUUID(), starts, ends, starts, starts);
   database.close();
   list = await request(`${base}/admin/applications`);
+  assert.equal(list.status, 403, 'non-operations minister must not see service management');
+  const operationsDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
+  operationsDatabase.prepare("UPDATE departments SET name='运行部',code='operations' WHERE id='ci-delete-dept'").run();
+  operationsDatabase.close();
+  list = await request(`${base}/admin/applications`);
+  assert.equal(list.status, 200, 'operations member can see service management');
   const listHtml = await list.text();
-  assert.match(listHtml, new RegExp(`/admin/applications/${appId}/delete`));
+  assert.match(listHtml, new RegExp(`/admin/applications/${appId}/delete`), 'service creator can manage own service');
   const deletePage = await request(`${base}/admin/applications/${appId}/delete`);
   assert.equal(deletePage.status, 200);
   assert.match(await deletePage.text(), /确认永久删除/);
@@ -236,6 +242,31 @@ try {
   assert.equal(verifyDatabase.prepare("SELECT COUNT(*) count FROM organization_terms WHERE id='ci-delete-term'").get().count, 1);
   verifyDatabase.prepare("UPDATE system_role_assignments SET status='active' WHERE person_id='dev-admin' AND role='super_admin'").run();
   verifyDatabase.close();
+
+  const batchPage = await request(`${base}/admin/people/batch?term=ci-delete-term`);
+  assert.equal(batchPage.status, 200);
+  assert.match(await batchPage.text(), /向已建届次批量加入委员/);
+  const batchCreated = await request(`${base}/admin/people/batch`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, term_id: 'ci-delete-term', grade_year: '2026', default_department_id: 'ci-delete-dept', batch: '2026123401,批量甲\n2026123402,批量乙,运行部' }),
+  });
+  assert.equal(batchCreated.status, 302);
+  const batchDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
+  assert.equal(batchDatabase.prepare("SELECT COUNT(*) count FROM appointments a JOIN positions p ON p.id=a.position_id WHERE a.term_id='ci-delete-term' AND a.person_id IN ('2026123401','2026123402') AND p.name='委员'").get().count, 2);
+  batchDatabase.close();
+
+  const platformPage = await request(`${base}/admin/people/2026123401/platform-access?term=ci-delete-term`);
+  assert.equal(platformPage.status, 200);
+  assert.match(await platformPage.text(), /平台身份与部长、副部长、委员等部门职务完全独立/);
+  const platformUpdated = await request(`${base}/admin/people/2026123401/platform-access`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, term: 'ci-delete-term', platform_identity: 'admin', permanent_member: '1' }),
+  });
+  assert.equal(platformUpdated.status, 302);
+  const privilegeDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
+  assert.equal(privilegeDatabase.prepare("SELECT permanent_member FROM people WHERE id='2026123401'").get().permanent_member, 1);
+  assert.equal(privilegeDatabase.prepare("SELECT status FROM system_role_assignments WHERE person_id='2026123401' AND role='super_admin'").get().status, 'active');
+  privilegeDatabase.close();
 } finally {
   await new Promise((resolve) => probe.close(resolve));
 }
@@ -245,6 +276,8 @@ console.log(JSON.stringify({
   flow: 'admin_via_internal_oidc',
   navigation: ['service_management', 'personnel_management', 'system_management'],
   onboarding: ['registration', 'ESSO-DFSJ_package', 'signed_connectivity', 'login_verification', 'logout_verification'],
-  deletion: 'minister_teacher_or_admin_with_confirmation',
+  permissions: 'platform_identity_independent_from_department_position',
+  batch_members: 'existing_term_supported',
+  deletion: 'service_creator_or_platform_admin_with_confirmation',
   password_exposure: false,
 }, null, 2));
