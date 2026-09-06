@@ -38,9 +38,11 @@ function methodTabs({ uid, csrf = '', active, wecomEnabled = true }) {
   return `<nav class="auth-method-tabs ${active === 'wecom' ? 'show-wecom' : 'show-password'}" aria-label="登录方式"><span class="method-slider" aria-hidden="true"></span>${password}${wecom}</nav>`;
 }
 
-function statusContent(title, message, { tone = statusTone(title), actions = '' } = {}) {
+function statusContent(title, message, { tone = statusTone(title), actions = '', code = '', reference = '', solutions = [] } = {}) {
   const iconType = tone === 'logout' ? 'logout' : tone;
-  return `<div class="status-hero ${escapeHtml(tone)}"><div class="status-icon">${icon(iconType)}</div><span class="status-kicker">${tone === 'success' ? '已完成' : tone === 'error' ? '未完成' : tone === 'logout' ? '退出登录' : '提示'}</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${actions ? `<div class="status-actions">${actions}</div>` : ''}</div>`;
+  const diagnostics = code || reference ? `<div class="status-diagnostics">${code ? `<span>错误代码</span><code>${escapeHtml(code)}</code>` : ''}${reference ? `<span>问题编号</span><code>${escapeHtml(reference)}</code>` : ''}</div>` : '';
+  const help = solutions.length ? `<div class="status-solution"><strong>可以这样处理</strong><ol>${solutions.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ol></div>` : '';
+  return `<div class="status-hero ${escapeHtml(tone)}"><div class="status-icon">${icon(iconType)}</div><span class="status-kicker">${tone === 'success' ? '已完成' : tone === 'error' ? '未完成' : tone === 'logout' ? '退出登录' : '提示'}</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${diagnostics}${help}${actions ? `<div class="status-actions">${actions}</div>` : ''}</div>`;
 }
 
 export function loginPage({ uid, appName, csrf, username = '', error = '', wecomEnabled = true }) {
@@ -71,8 +73,8 @@ export function qrPage({ uid, appName, csrf, transaction, qrSvg }) {
     </div>` });
 }
 
-export function messagePage(title, message) {
-  return layout({ title, appName: '部门统一身份认证', mode: 'status', content: statusContent(title, message) });
+export function messagePage(title, message, options = {}) {
+  return layout({ title, appName: options.appName || '部门统一身份认证', mode: 'status', content: statusContent(title, message, options) });
 }
 
 export function oidcLogoutPage({ appName, form }) {
@@ -87,5 +89,12 @@ export function oidcPostLogoutPage(appName) {
 export function oidcErrorPage(out = {}, error = {}) {
   const title = out.error === 'access_denied' ? '无权访问此应用' : '认证请求未完成';
   const message = out.error_description || '请返回原页面后重试。';
-  return layout({ title, appName: '部门统一身份认证', mode: 'status', content: statusContent(title, message, { tone: out.error === 'access_denied' ? 'warning' : 'error' }) });
+  const code = out.error === 'access_denied' ? 'ESSO-AUTH-4031' : 'ESSO-AUTH-4001';
+  return layout({ title, appName: '部门统一身份认证', mode: 'status', content: statusContent(title, message, {
+    tone: out.error === 'access_denied' ? 'warning' : 'error',
+    code,
+    solutions: out.error === 'access_denied'
+      ? ['退出当前账号后切换到有权访问该服务的账号。', '如确认应有权限，请联系服务管理员检查授权范围。']
+      : ['返回原业务系统，重新点击登录。', '不要重复提交浏览器历史中的登录表单。'],
+  }) });
 }

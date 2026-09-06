@@ -60,6 +60,7 @@ assert.equal(response.status, 200);
 assert.match(hostedLogin, /部门统一身份认证/);
 const loginCsrf = hostedLogin.match(/name="csrf" value="([^"]+)"/)?.[1];
 assert.ok(loginCsrf);
+const consumedInteractionUrl = current;
 const passwordUrl = `${new URL(current).origin}${new URL(current).pathname}/password`;
 response = await request(passwordUrl, {
   method: 'POST',
@@ -75,6 +76,12 @@ assert.match(current, /\/admin\/callback/);
 response = await request(current);
 assert.equal(response.status, 302);
 assert.match(response.headers.get('set-cookie') ?? '', /enterprise_admin=/);
+
+cookies.set('esso_recovery', 'admin');
+const recoveredInteraction = await request(consumedInteractionUrl);
+assert.equal(recoveredInteraction.status, 303, 'consumed admin interaction must self-recover');
+assert.equal(new URL(recoveredInteraction.headers.get('location'), base).pathname, new URL(`${base}/admin`).pathname);
+assert.equal(cookies.has('esso_recovery'), false, 'recovery marker must be one-time');
 
 const dashboard = await request(new URL(response.headers.get('location'), current));
 assert.equal(dashboard.status, 200);
@@ -201,6 +208,49 @@ try {
   operationsDatabase.close();
   list = await request(`${base}/admin/applications`);
   assert.equal(list.status, 200, 'operations member can see service management');
+
+  const invalidCredential = await request(`${base}/admin/agent-access`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, display_name: 'CI Agent', agent_identity: 'bad identity', valid_days: '30' }),
+  });
+  assert.equal(invalidCredential.status, 400);
+  assert.match(await invalidCredential.text(), /ESSO-AGENT-4002/);
+  const createdCredential = await request(`${base}/admin/agent-access`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, display_name: 'CI 运行部 Agent', agent_identity: 'codex:ci:operations', valid_days: '30' }),
+  });
+  assert.equal(createdCredential.status, 200, 'every operations member can create an Agent credential');
+  assert.match(await createdCredential.text(), /令牌只显示这一次/);
+
+  const interrupted = await request(`${base}/admin/applications`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, name: 'CI 中断后重建', client_id: 'ci-interrupted-app', project_root_url: 'http://127.0.0.1:8081/?copied=1#fragment', access_mode: 'rules' }),
+  });
+  assert.equal(interrupted.status, 200);
+  const interruptedHtml = await interrupted.text();
+  assert.match(interruptedHtml, /第二步/);
+  assert.match(interruptedHtml, /http:\/\/127\.0\.0\.1:8081\//);
+  const interruptedId = interruptedHtml.match(/\/admin\/applications\/([^/]+)\/monitor\/start/)?.[1];
+  assert.ok(interruptedId);
+  const interruptedDelete = await request(`${base}/admin/applications/${interruptedId}/delete`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, confirm_name: 'CI 中断后重建' }),
+  });
+  assert.equal(interruptedDelete.status, 302);
+  const recreated = await request(`${base}/admin/applications`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, name: 'CI 中断后重建', client_id: 'ci-interrupted-app', project_root_url: 'http://127.0.0.1:8081/', access_mode: 'rules' }),
+  });
+  assert.equal(recreated.status, 200, 'deleted step-two service can be recreated with the same Client ID');
+  const recreatedHtml = await recreated.text();
+  const recreatedId = recreatedHtml.match(/\/admin\/applications\/([^/]+)\/monitor\/start/)?.[1];
+  assert.ok(recreatedId);
+  const recreatedDelete = await request(`${base}/admin/applications/${recreatedId}/delete`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, confirm_name: 'CI 中断后重建' }),
+  });
+  assert.equal(recreatedDelete.status, 302);
+
   const listHtml = await list.text();
   assert.match(listHtml, new RegExp(`/admin/applications/${appId}/delete`), 'service creator can manage own service');
   const deletePage = await request(`${base}/admin/applications/${appId}/delete`);

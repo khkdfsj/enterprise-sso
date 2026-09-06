@@ -10,6 +10,7 @@ import { buildIntegrationPackage, deriveIntegrationUrls } from '../services/inte
 import { ADMIN_CLIENT_ID, adminCallbackUrl, adminClientSecret, adminLoggedOutUrl } from '../services/system-admin-client.js';
 import { addWorkflowMembers, createTurnoverWorkflow, deleteTurnoverWorkflowDraft, publishTurnoverWorkflow, saveRetainedMembers } from '../services/turnover-workflow.js';
 import { publicUrl } from '../public-url.js';
+import { adminRecoveryCookie } from '../recovery-cookie.js';
 import { formatBeijingTime, parseBeijingLocalTime } from './time.js';
 
 const router = express.Router();
@@ -139,15 +140,15 @@ function datetimeLocalBeijing(value) {
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(date).replace(' ', 'T');
 }
-function adminInputError(message, status = 400) {
-  return Object.assign(new Error(message), { expose: true, status });
+function adminInputError(message, status = 400, code = 'ESSO-INPUT-4001') {
+  return Object.assign(new Error(message), { expose: true, status, publicCode: code });
 }
 function validateRedirectUri(value) {
   let parsed;
-  try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('回调地址必须是完整 URL'); }
-  if (parsed.username || parsed.password || parsed.hash) throw new Error('回调地址不能包含账号、密码或锚点');
+  try { parsed = new URL(String(value ?? '').trim()); } catch { throw adminInputError('地址必须是包含 http:// 或 https:// 的完整 URL。', 400, 'ESSO-APP-4001'); }
+  if (parsed.username || parsed.password || parsed.hash) throw adminInputError('地址不能包含账号、密码或锚点。', 400, 'ESSO-APP-4002');
   const allowedHttp = parsed.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) throw new Error('回调地址必须使用 HTTPS，或使用已批准的内网 HTTP 主机');
+  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) throw adminInputError('地址必须使用 HTTPS；内网 HTTP 地址需先加入允许主机。', 400, 'ESSO-APP-4003');
   return parsed.toString();
 }
 async function updateClient(connection, clientId, transform) {
@@ -170,11 +171,13 @@ function validateRelatedUrl(value, redirectUri, label, required = true) {
   return url;
 }
 function projectRootUrl(value) {
-  const parsed = new URL(validateRedirectUri(value));
+  let parsed;
+  try { parsed = new URL(String(value ?? '').trim()); } catch { throw adminInputError('项目根地址必须是包含 http:// 或 https:// 的完整 URL。', 400, 'ESSO-APP-4001'); }
+  if (parsed.username || parsed.password) throw adminInputError('项目根地址不能包含账号或密码。', 400, 'ESSO-APP-4002');
   parsed.search = '';
   parsed.hash = '';
   if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
-  return parsed.toString();
+  return validateRedirectUri(parsed.toString());
 }
 function codeBlock(id, title, code) {
   return `<div class="code-block"><div class="code-head"><strong>${esc(title)}</strong><button type="button" class="button ghost small" data-copy="#${esc(id)}">复制代码</button></div><pre id="${esc(id)}"><code>${esc(code)}</code></pre></div>`;
@@ -250,7 +253,9 @@ async function loadAdminAccess(personId) {
     serviceView: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     serviceCreate: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     serviceManageAll: platformAdmin,
-    agentCredentialManage: platformAdmin,
+    agentCredentialView: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
+    agentCredentialCreate: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
+    agentCredentialManageAll: platformAdmin || permanent || teacher,
     peopleRead: true,
     peopleManage: platformAdmin || permanent || teacher || viceOrAbove || roles.includes('personnel_admin'),
     peopleRemove: platformAdmin || permanent || teacher || leaderOrAbove || roles.includes('personnel_admin'),
@@ -284,7 +289,7 @@ router.get('/login', (req, res) => {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   }).toString();
-  res.setHeader('Set-Cookie', flowCookie(flow));
+  res.setHeader('Set-Cookie', [flowCookie(flow), adminRecoveryCookie()]);
   return res.redirect(url.toString());
 });
 router.get('/callback', async (req, res, next) => {
@@ -309,16 +314,16 @@ router.get('/callback', async (req, res, next) => {
     const user = await userResponse.json();
     const access = await loadAdminAccess(user.sub);
     if (!access) {
-      res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0)]);
+      res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0), adminRecoveryCookie(0)]);
       return res.status(403).send(accessDeniedPage('此账号已完成统一认证，但没有有效任职或平台权限。'));
     }
-    res.setHeader('Set-Cookie', [cookie(makeSession(user.sub)), flowCookie('', 0)]);
+    res.setHeader('Set-Cookie', [cookie(makeSession(user.sub)), flowCookie('', 0), adminRecoveryCookie(0)]);
     await audit(req, 'admin_oidc_login', 'success', { actorPersonId: user.sub, targetType: 'application', targetId: ADMIN_CLIENT_ID });
     return res.redirect(publicUrl('/admin'));
   } catch (error) { return next(error); }
 });
 router.get('/logged-out', (_req, res) => {
-  res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0)]);
+  res.setHeader('Set-Cookie', [cookie('', 0), flowCookie('', 0), adminRecoveryCookie(0)]);
   res.send(loginPage('已退出', `<p class="login-subtitle">你可以使用其他账号重新登录。</p><a class="button primary full" href="${publicUrl('/admin/login')}">重新登录</a>`));
 });
 router.post('/logout', requireAdmin, body, requireCsrf, (req, res) => {
@@ -374,7 +379,7 @@ router.get('/applications', requireAdmin, requireServiceView, async (req, res) =
 
 router.get('/applications/new', requireAdmin, (req, res) => {
   if (forbidCapability(req, res, 'serviceCreate')) return;
-  const credentialButton = can(req, 'agentCredentialManage') ? `<a class="button secondary" href="${publicUrl('/admin/agent-access')}">管理 Agent 凭据</a>` : '';
+  const credentialButton = can(req, 'agentCredentialView') ? `<a class="button secondary" href="${publicUrl('/admin/agent-access')}">管理 Agent 凭据</a>` : '';
   res.send(adminPage(req, '新增接入服务', 'application-new', `<section class="table-panel"><div class="page-actions"><div><h2>让 AI Agent 自动完成接入</h2><p>Agent 可按标准 Skill 登记服务、下载同一个 ESSO-DFSJ 包并执行三项验收。</p></div><div class="action-row">${credentialButton}<a class="button ghost" href="https://github.com/khkdfsj/enterprise-sso/tree/main/skills/enterprise-sso-integration" target="_blank" rel="noopener">查看 Agent Skill，让 AI 协助快速接入</a></div></div></section>${wizardSteps(1)}<section class="wizard-panel"><div class="wizard-heading"><span>第一步</span><h2>登记项目基本信息</h2><p>只填写项目根地址，系统自动生成回调、注销、健康检查和测试地址。</p></div><form class="form-grid" method="post" action="${publicUrl('/admin/applications')}">${csrf(req)}<label>服务名称<input name="name" maxlength="180" placeholder="例如：值班管理后台" required></label><label>Client ID（可选）<input name="client_id" maxlength="120" placeholder="留空自动生成"></label><label class="span-2">项目访问根地址<input name="project_root_url" type="url" placeholder="http://210.47.163.114/qywx/YourProject/" required><small>填写浏览器访问地址，不是服务器磁盘路径；地址必须以项目根目录结尾。</small></label><label>访问范围<select name="access_mode"><option value="rules">按授权规则</option><option value="all_active">全部有效人员</option></select></label><label class="check-label"><input type="checkbox" name="provisioning_enabled" value="1">允许业务系统发起快捷注册</label><div class="form-actions span-2"><button class="button primary">登记并生成 ESSO-DFSJ 接入包</button></div></form></section>`, '手动向导或 Agent Skill 均生成相同的标准接入包'));
 });
 
@@ -387,7 +392,9 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     const urls = deriveIntegrationUrls(homeUrl);
     const { redirectUri, logoutUri, healthUri } = urls;
     const accessMode = req.body.access_mode === 'all_active' ? 'all_active' : 'rules';
-    if (!name || name.length > 180 || !/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('应用名称或 Client ID 格式不正确');
+    if (!name) throw adminInputError('请填写服务名称。', 400, 'ESSO-APP-4004');
+    if (name.length > 180) throw adminInputError('服务名称不能超过 180 个字符。', 400, 'ESSO-APP-4004');
+    if (!/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw adminInputError('Client ID 需为 3 到 120 位，仅允许字母、数字及 . _ ~ -。', 400, 'ESSO-APP-4005');
     const id = randomUUID(); const secret = randomToken(48); const hash = await hashPassword(secret); const now = new Date().toISOString();
     const verificationLogoutUri = `${config.issuer}/api/v1/integration-tests/${encodeURIComponent(id)}/logout`;
     const clientPayload = { client_id: clientId, client_secret: secret, client_name: name, redirect_uris: [redirectUri], post_logout_redirect_uris: [logoutUri, verificationLogoutUri], response_types: ['code'], grant_types: ['authorization_code'], token_endpoint_auth_method: 'client_secret_post', id_token_signed_response_alg: 'ES256' };
@@ -403,7 +410,10 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     for (const [token, item] of packageDownloads) if (item.expires <= Date.now()) packageDownloads.delete(token);
     const downloadUrl = publicUrl(`/admin/applications/${encodeURIComponent(id)}/package/${downloadToken}`);
     res.send(adminPage(req, '新增接入服务', 'application-new', `${wizardSteps(2)}<section class="wizard-panel"><div class="wizard-heading"><span>第二步</span><h2>下载 ESSO-DFSJ 接入包</h2><p>下载后解压，把整个 ESSO-DFSJ 文件夹放进项目根目录，禁止改名。下载链接和 Client Secret 仅本页有效。</p></div><div class="credential-table"><div><span>项目根地址</span><code>${esc(homeUrl)}</code></div><div><span>Client ID</span><code id="wizard-client">${esc(clientId)}</code><button data-copy="#wizard-client" class="button ghost small">复制</button></div><div><span>固定目录</span><code>ESSO-DFSJ/</code></div></div><div class="package-layout"><strong>接入包内含 9 个文件</strong><p>配置、协议客户端、登录与身份读取、回调、登出、健康检测、登录验收、登出验收和说明文档已经全部生成。</p><code>${esc(new URL('ESSO-DFSJ/login.php', homeUrl).toString())}</code></div><div class="wizard-actions"><a class="button primary" href="${downloadUrl}">下载 ESSO-DFSJ.zip</a><form method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(id)}/monitor/start`)}">${csrf(req)}<button class="button secondary">已部署，开始三项验收</button></form></div></section>`, '无需逐个复制文件，下载后整体部署'));
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (/UNIQUE constraint failed/i.test(error.message)) return next(adminInputError('Client ID 已被使用，请更换后重试。', 409, 'ESSO-APP-4091'));
+    return next(error);
+  }
 });
 
 router.get('/applications/:id/package/:token', requireAdmin, requireApplicationManager, async (req, res) => {
@@ -417,21 +427,25 @@ router.get('/applications/:id/package/:token', requireAdmin, requireApplicationM
 });
 
 router.get('/agent-access', requireAdmin, async (req, res) => {
-  if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
+  if (forbidCapability(req, res, 'agentCredentialView', '只有运行部成员及具备全局权限的人员可以查看 Agent 凭据。')) return;
+  const params = can(req, 'agentCredentialManageAll') ? [] : [req.admin.person.id];
+  const where = can(req, 'agentCredentialManageAll') ? '' : 'WHERE c.created_by=?';
   const [credentials] = await pool.execute(`SELECT c.*,p.display_name creator_name,
     (SELECT COUNT(*) FROM agent_service_registrations r WHERE r.credential_id=c.id) service_count
-    FROM agent_api_credentials c LEFT JOIN people p ON p.id=c.created_by ORDER BY c.created_at DESC`);
+    FROM agent_api_credentials c LEFT JOIN people p ON p.id=c.created_by ${where} ORDER BY c.created_at DESC`, params);
   const rows = credentials.map((item) => `<tr><td><strong>${esc(item.display_name)}</strong><small><code>${esc(item.agent_identity)}</code></small></td><td>${statusBadge(item.status)}</td><td>${item.service_count}</td><td>${formatTime(item.last_used_at)}</td><td>${formatTime(item.expires_at)}</td><td>${esc(item.creator_name ?? item.created_by)}</td><td>${item.status === 'active' ? `<form method="post" action="${publicUrl(`/admin/agent-access/${encodeURIComponent(item.id)}/revoke`)}">${csrf(req)}<button class="button danger small">撤销</button></form>` : '—'}</td></tr>`).join('');
   res.send(adminPage(req, 'Agent 自动接入', 'application-new', `<section class="table-panel"><div class="page-actions"><div><h2>签发 Agent 凭据</h2><p>身份标记必须稳定且可审计；令牌只显示一次，不写入 Skill 或 GitHub。</p></div><a class="button ghost" href="https://github.com/khkdfsj/enterprise-sso/tree/main/skills/enterprise-sso-integration" target="_blank" rel="noopener">查看 Agent Skill，让 AI 协助快速接入</a></div><form class="form-grid" method="post" action="${publicUrl('/admin/agent-access')}">${csrf(req)}<label>显示名称<input name="display_name" maxlength="120" placeholder="例如：Codex 运维 Agent" required></label><label>Agent 身份标记<input name="agent_identity" maxlength="160" placeholder="codex:team:dfsj-maintainer" required><small>只允许字母、数字及 : . _ @ / -</small></label><label>有效天数<input name="valid_days" type="number" min="1" max="365" value="30" required></label><div class="form-actions"><button class="button primary">签发一次性令牌</button></div></form></section><section class="table-panel"><div class="page-actions"><div><h2>已签发凭据</h2><p>撤销后 Agent 立即不能注册、下载或检测服务。</p></div><span class="count">${credentials.length} 个</span></div><div class="table-wrap"><table><thead><tr><th>Agent</th><th>状态</th><th>服务数</th><th>最近使用</th><th>到期</th><th>签发人</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty-cell">尚未签发 Agent 凭据</td></tr>'}</tbody></table></div></section>`, 'Agent 令牌与身份标记一一绑定'));
 });
 
 router.post('/agent-access', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
+    if (forbidCapability(req, res, 'agentCredentialCreate', '运行部成员及具备全局权限的人员可以签发 Agent 凭据。')) return;
     const displayName = String(req.body.display_name ?? '').trim();
     const identity = String(req.body.agent_identity ?? '').trim();
     const days = Number(req.body.valid_days);
-    if (!displayName || displayName.length > 120 || !/^[A-Za-z0-9][A-Za-z0-9:._@/-]{2,159}$/.test(identity) || !Number.isInteger(days) || days < 1 || days > 365) throw new Error('Agent 名称、身份标记或有效天数不正确');
+    if (!displayName || displayName.length > 120) throw adminInputError('Agent 显示名称必填，且不能超过 120 个字符。', 400, 'ESSO-AGENT-4001');
+    if (!/^[A-Za-z0-9][A-Za-z0-9:._@/-]{2,159}$/.test(identity)) throw adminInputError('Agent 身份标记需为 3 到 160 位，并以字母或数字开头；仅允许 : . _ @ / -。', 400, 'ESSO-AGENT-4002');
+    if (!Number.isInteger(days) || days < 1 || days > 365) throw adminInputError('有效天数必须是 1 到 365 的整数。', 400, 'ESSO-AGENT-4003');
     const token = randomToken(48);
     const id = randomUUID();
     const now = new Date();
@@ -444,8 +458,11 @@ router.post('/agent-access', requireAdmin, body, requireCsrf, async (req, res, n
 
 router.post('/agent-access/:id/revoke', requireAdmin, body, requireCsrf, async (req, res, next) => {
   try {
-    if (forbidCapability(req, res, 'agentCredentialManage', '只有平台管理员可以管理 Agent 凭据。')) return;
-    await pool.execute("UPDATE agent_api_credentials SET status='revoked',revoked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='active'", [req.params.id]);
+    if (forbidCapability(req, res, 'agentCredentialView', '当前账号不能管理 Agent 凭据。')) return;
+    const params = can(req, 'agentCredentialManageAll') ? [req.params.id] : [req.params.id, req.admin.person.id];
+    const ownerClause = can(req, 'agentCredentialManageAll') ? '' : ' AND created_by=?';
+    const [result] = await pool.execute(`UPDATE agent_api_credentials SET status='revoked',revoked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='active'${ownerClause}`, params);
+    if (!result.changes) return res.status(404).send(adminPage(req, '凭据不存在', 'application-new', '<div class="empty">凭据不存在、已经撤销，或不是由当前账号签发。</div>'));
     await audit(req, 'agent_credential_revoke', 'success', { actorPersonId: req.admin.person.id, targetType: 'agent_credential', targetId: req.params.id });
     return res.redirect(publicUrl('/admin/agent-access'));
   } catch (error) { return next(error); }

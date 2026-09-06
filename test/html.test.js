@@ -15,7 +15,7 @@ test('hosted login escapes application, username, and CSRF values', () => {
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /interaction%2Fone/);
   assert.match(html, /&lt;b&gt;bad&lt;\/b&gt;/);
-  assert.match(html, /assets\/login\.css\?v=0\.5\.5/);
+  assert.match(html, /assets\/login\.css\?v=0\.5\.6/);
 });
 
 test('QR page keeps browser secret in a POST body, not the status URL', () => {
@@ -33,6 +33,10 @@ test('QR page keeps browser secret in a POST body, not the status URL', () => {
 
 test('message page escapes API error text', () => {
   assert.doesNotMatch(messagePage('Error', '<script>x</script>'), /<script>x<\/script>/);
+  const detailed = messagePage('失败', '参数错误', { code: 'ESSO-TEST-4001', reference: '<ref>', solutions: ['重试 <script>x<\/script>'] });
+  assert.match(detailed, /ESSO-TEST-4001/);
+  assert.match(detailed, /&lt;ref&gt;/);
+  assert.doesNotMatch(detailed, /<script>x<\/script>/);
 });
 
 test('hosted login hides QR entry until WeCom credentials are complete', () => {

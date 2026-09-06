@@ -29,7 +29,7 @@ const registerId = 'agent-register-idempotent-0001';
 const registration = {
   agent_identity: identity,
   name: 'Agent API Test Service',
-  project_root_url: `${issuer}/agent-test-project/`,
+  project_root_url: `${issuer}/agent-test-project/?copied=1#fragment`,
   access_mode: 'rules',
   provisioning_enabled: false,
 };
@@ -38,6 +38,7 @@ assert.equal(response.status, 201);
 payload = await response.json();
 assert.equal(payload.idempotent_replay, false);
 assert.equal(payload.service.created_by_agent, identity);
+assert.equal(payload.service.project_root_url, `${issuer}/agent-test-project/`);
 const serviceId = payload.service.id;
 let packageToken = payload.package_token;
 

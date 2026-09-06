@@ -134,6 +134,13 @@ button, input { font: inherit; }
 .status-hero > p { max-width: 390px; margin: 0 auto; line-height: 1.8; }
 .status-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 27px; }
 .status-actions form { display: none; }
+.status-diagnostics { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; align-items: center; margin-top: 22px; padding: 12px 14px; border: 1px solid #e5eaf1; border-radius: 10px; background: #f8fafc; text-align: left; }
+.status-diagnostics span { color: #7b8798; font-size: 11px; }
+.status-diagnostics code { min-width: 0; overflow-wrap: anywhere; color: #344054; font: 600 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.status-solution { margin-top: 12px; padding: 14px 16px; border: 1px solid #e5eaf1; border-radius: 10px; background: #fff; text-align: left; }
+.status-solution strong { color: #344054; font-size: 12px; }
+.status-solution ol { margin: 7px 0 0; padding-left: 19px; color: #687386; font-size: 12px; line-height: 1.75; }
+.status-solution li + li { margin-top: 3px; }
 .status-help { display: flex; align-items: flex-start; gap: 11px; margin-top: 27px; padding: 14px; border: 1px solid #e6eaf0; border-radius: 11px; background: #f8fafc; text-align: left; }
 .status-help > span { flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--blue); background: #eaf3ff; }
 .status-help svg { width: 16px; height: 16px; }

@@ -47,14 +47,14 @@ async function requireAgent(req, res, next) {
 
 function validateProjectRoot(value) {
   let parsed;
-  try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('项目根地址必须是完整 URL'); }
-  if (parsed.username || parsed.password || parsed.hash) throw new Error('项目根地址不能包含账号、密码或锚点');
-  const allowedHttp = parsed.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) {
-    throw new Error('项目根地址必须使用 HTTPS，或使用已批准的内网 HTTP 主机');
-  }
+  try { parsed = new URL(String(value ?? '').trim()); } catch { throw Object.assign(new Error('项目根地址必须是包含 http:// 或 https:// 的完整 URL。'), { code: 'invalid_project_root' }); }
+  if (parsed.username || parsed.password) throw Object.assign(new Error('项目根地址不能包含账号或密码。'), { code: 'invalid_project_root' });
   parsed.search = '';
   parsed.hash = '';
+  const allowedHttp = parsed.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) {
+    throw Object.assign(new Error('项目根地址必须使用 HTTPS，或使用已批准的内网 HTTP 主机。'), { code: 'unapproved_project_host' });
+  }
   if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
   return parsed.toString();
 }

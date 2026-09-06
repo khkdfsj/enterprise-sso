@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
@@ -30,6 +31,7 @@ import { provisioningRouter } from './provisioning/router.js';
 import { agentRouter } from './agent/router.js';
 import { integrationTestsRouter } from './integration-tests/router.js';
 import { publicUrl } from './public-url.js';
+import { adminRecoveryCookie, hasAdminRecoveryCookie } from './recovery-cookie.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 await ensureSystemAdminClient();
@@ -314,9 +316,34 @@ router.get('/wecom/callback', noStore, async (req, res) => {
 router.use(provider.callback());
 
 router.use((error, req, res, _next) => {
-  console.error('request failed', { method: req.method, path: req.path, message: error.message });
+  const reference = randomUUID().slice(0, 8).toUpperCase();
+  const staleInteraction = req.path.startsWith('/interaction/')
+    && (error?.error === 'invalid_request' || error?.message === 'invalid_request' || error?.message === 'Interaction mismatch');
+  console.error('request failed', { reference, method: req.method, path: req.path, code: error?.publicCode ?? error?.error, message: error.message });
   if (res.headersSent) return;
-  res.status(500).type('html').send(messagePage('服务暂时不可用', '请稍后重试。'));
+  if (staleInteraction && hasAdminRecoveryCookie(req)) {
+    res.setHeader('Set-Cookie', adminRecoveryCookie(0));
+    return res.redirect(303, publicUrl('/admin'));
+  }
+  if (staleInteraction) {
+    const actions = `<a class="btn primary" href="${publicUrl('/admin')}">返回管理入口</a>`;
+    return res.status(410).type('html').send(messagePage('登录链接已失效', '这次登录已完成、已过期或被浏览器重复提交。', {
+      tone: 'warning', code: 'ESSO-AUTH-4101', reference,
+      solutions: ['返回原业务系统，重新点击登录。', '如果正在进入管理后台，可直接返回管理入口重新认证。'], actions,
+    }));
+  }
+  if (error?.expose) {
+    const actions = `<a class="btn primary" href="${publicUrl('/admin/applications/new')}">返回新增接入服务</a><a class="btn secondary no-margin" href="${publicUrl('/admin/agent-access')}">返回 Agent 凭据</a>`;
+    return res.status(error.status || 400).type('html').send(messagePage('提交内容未通过检查', error.message, {
+      tone: 'warning', code: error.publicCode || 'ESSO-INPUT-4001', reference,
+      solutions: ['按提示修改对应字段后重新提交。', '页面可以继续使用，不需要重启服务或清理数据库。'], actions,
+    }));
+  }
+  return res.status(500).type('html').send(messagePage('服务暂时不可用', '系统没有完成这次请求。', {
+    tone: 'error', code: 'ESSO-SYS-5000', reference,
+    solutions: ['刷新页面后重试一次。', `若仍然出现，请将问题编号 ${reference} 提交给管理员查询日志。`],
+    actions: `<a class="btn primary" href="${publicUrl('/admin')}">返回管理入口</a>`,
+  }));
 });
 
 app.use(config.publicBasePath || '/', router);
