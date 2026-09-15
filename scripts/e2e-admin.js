@@ -310,11 +310,13 @@ try {
   assert.match(await platformPage.text(), /平台身份与部长、副部长、委员等部门职务完全独立/);
   const platformUpdated = await request(`${base}/admin/people/2026123401/platform-access`, {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ csrf, term: 'ci-delete-term', platform_identity: 'admin', permanent_member: '1' }),
+    body: new URLSearchParams({ csrf, term: 'ci-delete-term', platform_identity: 'admin', permanent_member: '1', public_directory_visible: '0' }),
   });
   assert.equal(platformUpdated.status, 302);
   const privilegeDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
-  assert.equal(privilegeDatabase.prepare("SELECT permanent_member FROM people WHERE id='2026123401'").get().permanent_member, 1);
+  const updatedPrivilege = privilegeDatabase.prepare("SELECT permanent_member,public_directory_visible FROM people WHERE id='2026123401'").get();
+  assert.equal(updatedPrivilege.permanent_member, 1);
+  assert.equal(updatedPrivilege.public_directory_visible, 0);
   assert.equal(privilegeDatabase.prepare("SELECT status FROM system_role_assignments WHERE person_id='2026123401' AND role='super_admin'").get().status, 'active');
   privilegeDatabase.close();
 } finally {

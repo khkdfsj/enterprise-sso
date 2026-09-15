@@ -31,6 +31,7 @@ router.get(peoplePath, publicHeaders, limiter, async (req, res) => {
       `SELECT id AS user_id,display_name AS name
        FROM people
        WHERE status IN ('active','probation')
+         AND public_directory_visible=1
        ORDER BY id`,
     );
     return apiSuccess(res, {

@@ -706,12 +706,12 @@ router.post('/people/batch', requireAdmin, batchBody, requireCsrf, async (req, r
 router.get('/people/:id/platform-access', requireAdmin, async (req, res) => {
   if (forbidCapability(req, res, 'privilegeGrant', '只有平台管理员、老师或永久账户可以授予平台身份。')) return;
   const [[people], [roles]] = await Promise.all([
-    pool.execute('SELECT id,display_name,permanent_member FROM people WHERE id=?', [req.params.id]),
+    pool.execute('SELECT id,display_name,permanent_member,public_directory_visible FROM people WHERE id=?', [req.params.id]),
     pool.execute("SELECT status FROM system_role_assignments WHERE person_id=? AND role='super_admin'", [req.params.id]),
   ]);
   const person = people[0]; if (!person) return res.sendStatus(404);
   const isAdmin = roles[0]?.status === 'active';
-  res.send(adminPage(req, '平台身份', 'people', `<div class="breadcrumb"><a href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">人员与账号</a><span>/</span><span>平台身份</span></div><section class="table-panel"><div class="page-actions"><div><h2>${esc(person.display_name)} · ${esc(person.id)}</h2><p>平台身份与部长、副部长、委员等部门职务完全独立。</p></div>${isAdmin ? badge('平台管理员','info') : badge('普通平台用户','muted')}</div><div class="notice"><strong>权限规则</strong><p>平台管理员拥有全部后台权限并跳过部门职务限制；普通平台用户继续按照老师、永久账户、所属部门和当前职位获得权限。</p></div><form class="form-grid" method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(person.id)}/platform-access`)}">${csrf(req)}<input type="hidden" name="term" value="${esc(req.query.term ?? '')}"><label>平台身份<select name="platform_identity"><option value="user" ${isAdmin ? '' : 'selected'}>普通平台用户</option><option value="admin" ${isAdmin ? 'selected' : ''}>平台管理员</option></select></label><label>账户有效期<select name="permanent_member"><option value="0" ${person.permanent_member ? '' : 'selected'}>按人员状态和届次</option><option value="1" ${person.permanent_member ? 'selected' : ''}>永久账户</option></select></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">取消</a><button class="button primary">保存平台权限</button></div></form></section>`, '平台角色和组织职位分开管理'));
+  res.send(adminPage(req, '平台身份', 'people', `<div class="breadcrumb"><a href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">人员与账号</a><span>/</span><span>平台身份</span></div><section class="table-panel"><div class="page-actions"><div><h2>${esc(person.display_name)} · ${esc(person.id)}</h2><p>平台身份与部长、副部长、委员等部门职务完全独立。</p></div>${isAdmin ? badge('平台管理员','info') : badge('普通平台用户','muted')}</div><div class="notice"><strong>权限规则</strong><p>平台管理员拥有全部后台权限并跳过部门职务限制；普通平台用户继续按照老师、永久账户、所属部门和当前职位获得权限。</p></div><form class="form-grid" method="post" action="${publicUrl(`/admin/people/${encodeURIComponent(person.id)}/platform-access`)}">${csrf(req)}<input type="hidden" name="term" value="${esc(req.query.term ?? '')}"><label>平台身份<select name="platform_identity"><option value="user" ${isAdmin ? '' : 'selected'}>普通平台用户</option><option value="admin" ${isAdmin ? 'selected' : ''}>平台管理员</option></select></label><label>账户有效期<select name="permanent_member"><option value="0" ${person.permanent_member ? '' : 'selected'}>按人员状态和届次</option><option value="1" ${person.permanent_member ? 'selected' : ''}>永久账户</option></select></label><label>公开人员目录<select name="public_directory_visible"><option value="1" ${person.public_directory_visible ? 'selected' : ''}>显示</option><option value="0" ${person.public_directory_visible ? '' : 'selected'}>隐藏</option></select></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl(`/admin/people?term=${encodeURIComponent(req.query.term ?? '')}`)}">取消</a><button class="button primary">保存平台权限</button></div></form></section>`, '平台角色和组织职位分开管理'));
 });
 
 router.post('/people/:id/platform-access', requireAdmin, body, requireCsrf, async (req, res, next) => { try {
@@ -719,15 +719,16 @@ router.post('/people/:id/platform-access', requireAdmin, body, requireCsrf, asyn
   if (req.params.id === req.admin.person.id) throw new Error('为避免当前账号锁死，不能在这里修改自己的平台身份或永久状态');
   const makeAdmin = req.body.platform_identity === 'admin';
   const makePermanent = req.body.permanent_member === '1';
-  if (!['user','admin'].includes(req.body.platform_identity) || !['0','1'].includes(req.body.permanent_member)) return res.sendStatus(400);
+  const directoryVisible = req.body.public_directory_visible === '1';
+  if (!['user','admin'].includes(req.body.platform_identity) || !['0','1'].includes(req.body.permanent_member) || !['0','1'].includes(req.body.public_directory_visible)) return res.sendStatus(400);
   const now = new Date().toISOString();
   await withTransaction(async (connection) => {
     const [people] = await connection.execute('SELECT id FROM people WHERE id=?', [req.params.id]);
     if (!people[0]) throw new Error('人员不存在');
-    await connection.execute('UPDATE people SET permanent_member=?,authorization_version=authorization_version+1,updated_at=? WHERE id=?', [makePermanent ? 1 : 0, now, req.params.id]);
+    await connection.execute('UPDATE people SET permanent_member=?,public_directory_visible=?,authorization_version=authorization_version+1,updated_at=? WHERE id=?', [makePermanent ? 1 : 0, directoryVisible ? 1 : 0, now, req.params.id]);
     await connection.execute(`INSERT INTO system_role_assignments(person_id,role,status,granted_by,starts_at,ends_at,created_at) VALUES (?,'super_admin',?,?,?,NULL,?) ON CONFLICT(person_id,role) DO UPDATE SET status=excluded.status,granted_by=excluded.granted_by,starts_at=excluded.starts_at,ends_at=NULL`, [req.params.id, makeAdmin ? 'active' : 'disabled', req.admin.person.id, now, now]);
   });
-  await audit(req, 'person_platform_access_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'person', targetId: req.params.id, detail: { platform_identity: makeAdmin ? 'admin' : 'user', permanent_member: makePermanent } });
+  await audit(req, 'person_platform_access_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'person', targetId: req.params.id, detail: { platform_identity: makeAdmin ? 'admin' : 'user', permanent_member: makePermanent, public_directory_visible: directoryVisible } });
   return res.redirect(publicUrl(`/admin/people?term=${encodeURIComponent(req.body.term ?? '')}`));
 } catch (error) { next(error); } });
 

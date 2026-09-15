@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 
 const issuer = process.env.E2E_ISSUER ?? 'http://127.0.0.1:3000';
 const requestId = 'public-people-test-0001';
@@ -17,6 +18,16 @@ assert.equal(payload.request_id, requestId);
 assert.equal(payload.count, 1);
 assert.deepEqual(payload.people, [{ user_id: 'dev-admin', name: '开发管理员' }]);
 assert.deepEqual(Object.keys(payload.people[0]).sort(), ['name', 'user_id']);
+
+const database = new DatabaseSync(process.env.E2E_DB_FILE);
+database.prepare('UPDATE people SET public_directory_visible=0 WHERE id=?').run('dev-admin');
+const hiddenResponse = await fetch(`${issuer}/api/v1/public/people`);
+assert.equal(hiddenResponse.status, 200);
+const hiddenPayload = await hiddenResponse.json();
+assert.equal(hiddenPayload.count, 0);
+assert.deepEqual(hiddenPayload.people, []);
+database.prepare('UPDATE people SET public_directory_visible=1 WHERE id=?').run('dev-admin');
+database.close();
 
 const preflight = await fetch(`${issuer}/api/v1/public/people`, { method: 'OPTIONS' });
 assert.equal(preflight.status, 204);
