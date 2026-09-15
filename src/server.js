@@ -27,9 +27,8 @@ import { ensureSystemAdminClient } from './services/system-admin-client.js';
 import { runDueApplicationChecks } from './services/application-monitor.js';
 import { loginPage, messagePage, qrPage } from './views/html.js';
 import { adminRouter } from './admin/router.js';
-import { provisioningRouter } from './provisioning/router.js';
-import { agentRouter } from './agent/router.js';
-import { integrationTestsRouter } from './integration-tests/router.js';
+import { registrationPageRouter } from './provisioning/router.js';
+import { apiRouter } from './api/router.js';
 import { publicUrl } from './public-url.js';
 import { adminRecoveryCookie, hasAdminRecoveryCookie } from './recovery-cookie.js';
 
@@ -147,10 +146,9 @@ router.get('/healthz', async (_req, res) => {
 });
 
 router.get('/', (_req, res) => res.redirect(publicUrl('/.well-known/openid-configuration')));
+router.use('/api', apiRouter);
 router.use('/admin', noStore, adminRouter);
-router.use(noStore, agentRouter);
-router.use(noStore, integrationTestsRouter);
-router.use(noStore, provisioningRouter);
+router.use(noStore, registrationPageRouter);
 
 router.get('/interaction/:uid', noStore, async (req, res, next) => {
   try {

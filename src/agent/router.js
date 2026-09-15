@@ -8,6 +8,7 @@ import { decryptJson, encryptJson, randomToken, safeEqualHex, sha256 } from '../
 import { hashPassword } from '../security/password.js';
 import { checkApplicationConnectivity } from '../services/application-monitor.js';
 import { buildIntegrationPackage, deriveIntegrationUrls } from '../services/integration-package.js';
+import { apiError as sendApiError, apiSuccess } from '../api/response.js';
 
 const router = express.Router();
 const json = express.json({ limit: '32kb' });
@@ -16,7 +17,8 @@ const identityPattern = /^[A-Za-z0-9][A-Za-z0-9:._@/-]{2,159}$/;
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9:._@/-]{7,159}$/;
 
 function apiError(res, status, error, message, requestId = null) {
-  return res.status(status).json({ error, message, request_id: requestId });
+  if (requestId) res.req.apiRequestId = requestId;
+  return sendApiError(res, status, error, message);
 }
 
 function requestId(req) {
@@ -128,10 +130,10 @@ async function responseForService(app, packageIssue = null) {
   };
 }
 
-router.use('/api/v1/agent', limiter, requireAgent);
+router.use(limiter, requireAgent);
 
-router.get('/api/v1/agent/capabilities', (req, res) => {
-  res.json({
+router.get('/capabilities', (req, res) => {
+  apiSuccess(res, {
     api_version: 'v1',
     agent_identity: req.agent.identity,
     package_name: 'ESSO-DFSJ',
@@ -144,7 +146,7 @@ router.get('/api/v1/agent/capabilities', (req, res) => {
   });
 });
 
-router.post('/api/v1/agent/services', json, async (req, res, next) => {
+router.post('/services', json, async (req, res, next) => {
   try {
     const values = validateRegistration(req.body ?? {}, req.agent.identity);
     const [prior] = await pool.execute(
@@ -162,7 +164,7 @@ router.post('/api/v1/agent/services', json, async (req, res, next) => {
         await pool.execute("UPDATE oidc_objects SET payload=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE model='Client' AND id=?", [JSON.stringify(encryptJson(client)), prior[0].client_id]);
       }
       const packageIssue = await issuePackageToken(prior[0].id, req.agent.credential.id);
-      return res.status(200).json({ request_id: req.agent.requestId, idempotent_replay: true, ...(await responseForService(prior[0], packageIssue)) });
+      return apiSuccess(res, { idempotent_replay: true, ...(await responseForService(prior[0], packageIssue)) });
     }
     const id = randomUUID();
     const clientId = values.requestedClientId || `app_${randomToken(9).replaceAll('-', '').replaceAll('_', '')}`;
@@ -194,19 +196,19 @@ router.post('/api/v1/agent/services', json, async (req, res, next) => {
     });
     const app = { id, client_id: clientId, name: values.name, access_mode: values.accessMode, provisioning_enabled: values.provisioningEnabled ? 1 : 0, integration_status: 'configuring', home_url: urls.projectRoot, agent_identity: req.agent.identity, last_check_status: null, last_check_at: null, last_check_message: null, auth_test_at: null, logout_test_at: null };
     await audit(req, 'agent_service_register', 'success', { targetType: 'application', targetId: id, detail: { agent_identity: req.agent.identity, client_id: clientId } });
-    return res.status(201).json({ request_id: req.agent.requestId, idempotent_replay: false, ...(await responseForService(app, packageIssue)) });
+    return apiSuccess(res, { idempotent_replay: false, ...(await responseForService(app, packageIssue)) }, 201);
   } catch (error) { return next(error); }
 });
 
-router.get('/api/v1/agent/services/:id', async (req, res, next) => {
+router.get('/services/:id', async (req, res, next) => {
   try {
     const app = await ownedService(req);
     if (!app) return apiError(res, 404, 'service_not_found', '服务不存在或不属于当前 Agent。', req.agent.requestId);
-    return res.json({ request_id: req.agent.requestId, ...(await responseForService(app)) });
+    return apiSuccess(res, await responseForService(app));
   } catch (error) { return next(error); }
 });
 
-router.get('/api/v1/agent/services/:id/package', async (req, res, next) => {
+router.get('/services/:id/package', async (req, res, next) => {
   try {
     const app = await ownedService(req);
     if (!app) return apiError(res, 404, 'service_not_found', '服务不存在或不属于当前 Agent。', req.agent.requestId);
@@ -230,29 +232,29 @@ router.get('/api/v1/agent/services/:id/package', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/api/v1/agent/services/:id/monitor', async (req, res, next) => {
+router.post('/services/:id/monitor', async (req, res, next) => {
   try {
     const app = await ownedService(req);
     if (!app) return apiError(res, 404, 'service_not_found', '服务不存在或不属于当前 Agent。', req.agent.requestId);
     const until = new Date(Date.now() + 30 * 60_000).toISOString();
     await pool.execute("UPDATE applications SET monitor_until=?,integration_status='testing',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [until, app.id]);
     await audit(req, 'agent_monitor_start', 'success', { targetType: 'application', targetId: app.id, detail: { agent_identity: req.agent.identity, monitor_until: until } });
-    return res.json({ request_id: req.agent.requestId, service_id: app.id, monitor_until: until, status: 'testing' });
+    return apiSuccess(res, { service_id: app.id, monitor_until: until, status: 'testing' });
   } catch (error) { return next(error); }
 });
 
-router.post('/api/v1/agent/services/:id/tests/connectivity', async (req, res, next) => {
+router.post('/services/:id/tests/connectivity', async (req, res, next) => {
   try {
     const app = await ownedService(req);
     if (!app) return apiError(res, 404, 'service_not_found', '服务不存在或不属于当前 Agent。', req.agent.requestId);
     const result = await checkApplicationConnectivity(app.id);
     await audit(req, 'agent_connectivity_test', result.status === 'success' ? 'success' : 'failure', { targetType: 'application', targetId: app.id, detail: { agent_identity: req.agent.identity, ...result } });
     const payload = { request_id: req.agent.requestId, service_id: app.id, test: 'connectivity', status: result.status === 'success' ? 'passed' : 'failed', ...result };
-    return res.status(result.status === 'success' ? 200 : 422).json(payload);
+    return apiSuccess(res, payload, result.status === 'success' ? 200 : 422);
   } catch (error) { return next(error); }
 });
 
-router.use('/api/v1/agent', (error, req, res, _next) => {
+router.use((error, req, res, _next) => {
   if (error?.type === 'entity.parse.failed') return apiError(res, 400, 'invalid_request', 'JSON 格式不正确。', req.agent?.requestId ?? null);
   const status = error.status ?? 400;
   const code = error.code ?? (status === 409 ? 'conflict' : 'invalid_request');

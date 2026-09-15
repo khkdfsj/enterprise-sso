@@ -1,5 +1,46 @@
 # Enterprise SSO 全部地址清单
 
+## 在职人员公开接口
+
+`GET http://210.47.163.114/enterprise-sso/api/v1/public/people`
+
+该接口无需登录或 Token，也不接收查询参数或请求体，允许跨域只读访问。它只返回状态为“启用”或“试用”的在职人员，不返回部门、职位、手机号、密码、账号状态等其他信息。响应最多缓存 60 秒。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "request_id": "0b239ed3-10e6-4615-9fb8-9f3f83af7157",
+  "count": 2,
+  "people": [
+    { "user_id": "2023195077", "name": "示例姓名" },
+    { "user_id": "2024195001", "name": "示例姓名二" }
+  ]
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `ok` | boolean | 请求是否成功 |
+| `request_id` | string | 本次请求编号；排障时提供给管理员 |
+| `count` | number | 本次返回的人数 |
+| `people[].user_id` | string | ESSO 唯一 UserID，即学号或工号 |
+| `people[].name` | string | 人员姓名 |
+
+请求频率超过限制时返回 HTTP 429；内部读取失败时返回 HTTP 500，并携带 `ESSO-PUBLIC-5000` 和问题编号。
+
+## API 统一规范
+
+- 所有业务 API 集中在 `/api/v1` 下，按领域划分为 `/public`、`/agent`、`/registrations` 和 `/integration-tests`。
+- 资源名称使用小写复数名词；公开人员资源使用 `/public/people`，不在 URL 中使用动词。
+- JSON 成功响应统一包含 `ok: true` 和 `request_id`；JSON 失败响应统一包含 `ok: false`、`request_id`、`error` 与 `message`。
+- 客户端可发送 8 到 160 位合法 `X-Request-ID`；未发送时系统自动生成，并同时写入响应头 `X-Request-ID`。
+- API 日期时间统一使用 ISO 8601 字符串；UserID 始终作为字符串处理，不能转换成数字。
+- 浏览器页面和 OIDC 协议端点不归入业务 API：`/admin`、`/interaction`、`/register`、`/auth`、`/token` 等保持独立。
+
 ## Agent 自动接入 API
 
 以下接口都要求 `Authorization: Bearer`、`X-ESSO-Agent-Identity` 和 `X-Request-ID`；完整请求体、幂等语义和错误码见 [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)。

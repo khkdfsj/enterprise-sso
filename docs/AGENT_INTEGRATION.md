@@ -26,7 +26,7 @@ X-Request-ID: <本次操作的稳定唯一编号>
 - 内容类型：除 ZIP 下载外均为 `application/json`。
 - 时间：ISO 8601 UTC；后台展示时转换为北京时间（Asia/Shanghai）。
 - UserID：字符串，是企业微信 UserID、学号和 ESSO 人员主键的同一值，禁止另造映射主键。
-- 错误结构：`{"error":"错误代码","message":"中文说明","request_id":"..."}`。
+- 所有 JSON 成功响应包含 `{"ok":true,"request_id":"..."}`，业务字段位于同一对象中；错误结构统一为 `{"ok":false,"error":"错误代码","message":"中文说明","request_id":"..."}`。
 - Agent 不得把 Client Secret、Agent Token 或 ZIP 内容回传到聊天正文；只报告脱敏 Client ID、服务 ID、状态和测试结果。
 
 ## 3. 标准执行顺序

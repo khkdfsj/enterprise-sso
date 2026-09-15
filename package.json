@@ -1,6 +1,6 @@
 {
   "name": "enterprise-sso",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Enterprise OIDC SSO with password and WeCom QR authentication",
@@ -22,6 +22,7 @@
     "personnel:verify": "node scripts/verify-migration.js",
     "wecom:sync-identities": "node src/cli/sync-wecom-identities.js",
     "test:e2e": "node scripts/e2e-login.js",
+    "test:public-api": "node scripts/e2e-public-api.js",
     "test:turnover": "node scripts/e2e-turnover.js",
     "test:agent": "node scripts/e2e-agent.js",
     "test:ci-e2e": "node scripts/ci-e2e.js",

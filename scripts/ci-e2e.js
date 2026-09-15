@@ -64,6 +64,7 @@ try {
   if (!healthy) throw new Error('Test server did not become healthy');
 
   run('scripts/e2e-login.js');
+  run('scripts/e2e-public-api.js');
   run('scripts/e2e-admin.js');
   run('scripts/e2e-provisioning.js');
   run('scripts/e2e-agent.js');

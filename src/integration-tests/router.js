@@ -50,7 +50,7 @@ function testCookie(value, maxAge) {
   return `esso_logout_test=${value}; Path=${config.publicBasePath || ''}/api/v1/integration-tests/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${config.secureCookies ? '; Secure' : ''}`;
 }
 
-router.get('/api/v1/integration-tests/:id/login', async (req, res) => {
+router.get('/:id/login', async (req, res) => {
   const sub = String(req.query.sub ?? '').trim();
   const timestamp = validTimestamp(req.query.ts);
   const secret = await clientSecret(req.params.id);
@@ -63,7 +63,7 @@ router.get('/api/v1/integration-tests/:id/login', async (req, res) => {
   return res.type('html').send(messagePage('登录验收通过', `已验证 UserID ${sub}，Agent 可继续执行注销验收。`));
 });
 
-router.get('/api/v1/integration-tests/:id/logout/start', async (req, res) => {
+router.get('/:id/logout/start', async (req, res) => {
   const timestamp = validTimestamp(req.query.ts);
   const secret = await clientSecret(req.params.id);
   if (!timestamp || !secret) return res.status(400).type('html').send(messagePage('注销验收失败', '验收凭据无效或已经超过五分钟。'));
@@ -77,7 +77,7 @@ router.get('/api/v1/integration-tests/:id/logout/start', async (req, res) => {
   return res.redirect(303, armedUrl);
 });
 
-router.get('/api/v1/integration-tests/:id/logout', async (req, res) => {
+router.get('/:id/logout', async (req, res) => {
   const state = readPayload(cookieValue(req, 'esso_logout_test'));
   if (!state || state.applicationId !== req.params.id || state.expires <= Date.now()) {
     return res.status(400).type('html').send(messagePage('注销验收失败', '验收状态无效或已经超过五分钟。'));

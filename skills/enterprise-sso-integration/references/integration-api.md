@@ -10,6 +10,8 @@ X-ESSO-Agent-Identity: <stable identity bound to that token>
 X-Request-ID: <stable unique id for this logical operation>
 ```
 
+All JSON success responses contain `ok: true` and `request_id`. All JSON errors contain `ok: false`, `request_id`, `error`, and `message`. Treat every UserID as a string. Existing domain fields remain top-level for API v1 compatibility.
+
 Never place tokens in URLs, Git, chat output, shell history intended for sharing, or application frontend code. Registration JSON must repeat `agent_identity`; all identity values must match. Reuse the same request ID after an uncertain result so registration remains idempotent.
 
 | Method and path | Purpose |

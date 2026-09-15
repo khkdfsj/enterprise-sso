@@ -7,8 +7,10 @@ import { sha256 } from '../security/crypto.js';
 import { hashPassword, verifyPassword } from '../security/password.js';
 import { messagePage } from '../views/html.js';
 import { publicUrl } from '../public-url.js';
+import { apiError, apiSuccess } from '../api/response.js';
 
-const router = express.Router();
+const apiRouter = express.Router();
+const pageRouter = express.Router();
 const json = express.json({ limit: '16kb' });
 const form = express.urlencoded({ extended: false, limit: '16kb' });
 const USER_ID_PATTERN = /^[A-Za-z0-9_.@-]{2,120}$/;
@@ -31,12 +33,12 @@ async function client(req) {
   return application;
 }
 
-router.post('/api/v1/registrations', provisioningLimit, json, async (req, res) => {
+apiRouter.post('/', provisioningLimit, json, async (req, res) => {
   const application = await client(req);
-  if (!application) return res.status(401).json({ error: 'invalid_client' });
+  if (!application) return apiError(res, 401, 'invalid_client', '客户端凭据无效或未启用快捷注册。');
   const userId = String(req.body.user_id ?? '').trim();
   const displayName = String(req.body.display_name ?? '').trim();
-  if (!USER_ID_PATTERN.test(userId) || !displayName || displayName.length > 160) return res.status(400).json({ error: 'invalid_request' });
+  if (!USER_ID_PATTERN.test(userId) || !displayName || displayName.length > 160) return apiError(res, 400, 'invalid_request', 'user_id 或 display_name 格式不正确。');
   const token = randomBytes(32).toString('base64url');
   const id = randomUUID();
   const now = new Date();
@@ -46,15 +48,15 @@ router.post('/api/v1/registrations', provisioningLimit, json, async (req, res) =
      VALUES (?,?,?,?,?,?,?)`,
     [id, application.id, sha256(token), userId, displayName, expires, now],
   );
-  res.status(201).json({
+  return apiSuccess(res, {
     registration_id: id,
     user_id: userId,
     registration_url: `${config.issuer}/register/${token}`,
     expires_at: expires.toISOString(),
-  });
+  }, 201);
 });
 
-router.get('/register/:token', async (req, res) => {
+pageRouter.get('/register/:token', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT q.user_id,q.display_name,a.name application_name FROM quick_registration_tokens q
      JOIN applications a ON a.id=q.application_id
@@ -66,7 +68,7 @@ router.get('/register/:token', async (req, res) => {
   res.send(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>开通统一认证</title><link rel="stylesheet" href="${publicUrl('/assets/login.css')}"></head><body><main class="shell"><section class="intro"><h1>开通统一认证</h1><p>由 ${escapeHtml(record.application_name)} 发起。UserID 将作为唯一身份主键。</p></section><section class="panel"><h2>${escapeHtml(record.display_name)}</h2><p class="hint">UserID：${escapeHtml(record.user_id)}</p><form method="post"><label>设置密码<input type="password" name="password" minlength="12" maxlength="200" autocomplete="new-password" required></label><button class="btn primary">完成注册</button></form></section></main></body></html>`);
 });
 
-router.post('/register/:token', registrationLimit, form, async (req, res, next) => {
+pageRouter.post('/register/:token', registrationLimit, form, async (req, res, next) => {
   try {
     const passwordHash = await hashPassword(req.body.password);
     await withTransaction(async (connection) => {
@@ -116,4 +118,5 @@ router.post('/register/:token', registrationLimit, form, async (req, res, next) 
   }
 });
 
-export const provisioningRouter = router;
+export const provisioningApiRouter = apiRouter;
+export const registrationPageRouter = pageRouter;
