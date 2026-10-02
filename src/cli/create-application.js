@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { config } from '../config.js';
 import { pool, withTransaction } from '../db.js';
 import { encryptJson, randomToken } from '../security/crypto.js';
 import { hashPassword } from '../security/password.js';
+import { isApprovedIntegrationUrl } from '../services/trusted-http-origins.js';
 
 const name = String(process.env.APP_NAME ?? '').trim();
 const redirectUri = String(process.env.APP_REDIRECT_URI ?? '').trim();
@@ -15,11 +15,7 @@ if (!name || name.length > 180) throw new Error('APP_NAME is required and must n
 let parsedRedirect;
 try { parsedRedirect = new URL(redirectUri); } catch { throw new Error('APP_REDIRECT_URI must be an absolute URL'); }
 if (parsedRedirect.username || parsedRedirect.password || parsedRedirect.hash) throw new Error('APP_REDIRECT_URI cannot contain credentials or a fragment');
-if (parsedRedirect.protocol !== 'https:') {
-  const developmentLoopback = !config.production && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(redirectUri);
-  const approvedInternalHttp = parsedRedirect.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsedRedirect.hostname);
-  if (!developmentLoopback && !approvedInternalHttp) throw new Error('APP_REDIRECT_URI must use HTTPS or an explicitly approved internal HTTP host');
-}
+if (!(await isApprovedIntegrationUrl(parsedRedirect))) throw new Error('APP_REDIRECT_URI must use HTTPS or an explicitly approved internal HTTP host');
 if (!/^[A-Za-z0-9._~-]{3,120}$/.test(clientId)) throw new Error('APP_CLIENT_ID contains unsupported characters');
 
 const applicationId = randomUUID();

@@ -38,6 +38,8 @@ Registration body:
 
 Required: `agent_identity`, `name`, `project_root_url`. `client_id` is optional. The API derives the exact callback, logout, health, login-test, and logout-test URLs. It returns only one package token; consume it within 15 minutes. Only the credential that created the service may query it through the Agent API.
 
+For an HTTP project root, ask an ESSO platform administrator to add its exact IPv4 address and port under 接入服务管理 → 可信内网地址 before registering. Do not substitute an unapproved HTTP address or change the HTTPS WeCom callback.
+
 The connectivity test is machine-executable. Login and logout are real browser acceptance tests: open the URLs returned in `tests.login.url` and `tests.logout.url`, then poll the service resource until all statuses are `passed`. Do not claim acceptance from HTTP reachability alone.
 
 For complete request examples, error codes, and reporting requirements, read the repository document `docs/AGENT_INTEGRATION.md`.

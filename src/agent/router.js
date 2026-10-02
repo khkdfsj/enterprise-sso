@@ -8,6 +8,7 @@ import { decryptJson, encryptJson, randomToken, safeEqualHex, sha256 } from '../
 import { hashPassword } from '../security/password.js';
 import { checkApplicationConnectivity } from '../services/application-monitor.js';
 import { buildIntegrationPackage, deriveIntegrationUrls } from '../services/integration-package.js';
+import { isApprovedIntegrationUrl } from '../services/trusted-http-origins.js';
 import { apiError as sendApiError, apiSuccess } from '../api/response.js';
 
 const router = express.Router();
@@ -47,25 +48,24 @@ async function requireAgent(req, res, next) {
   return next();
 }
 
-function validateProjectRoot(value) {
+async function validateProjectRoot(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw Object.assign(new Error('项目根地址必须是包含 http:// 或 https:// 的完整 URL。'), { code: 'invalid_project_root' }); }
   if (parsed.username || parsed.password) throw Object.assign(new Error('项目根地址不能包含账号或密码。'), { code: 'invalid_project_root' });
   parsed.search = '';
   parsed.hash = '';
-  const allowedHttp = parsed.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) {
+  if (!(await isApprovedIntegrationUrl(parsed))) {
     throw Object.assign(new Error('项目根地址必须使用 HTTPS，或使用已批准的内网 HTTP 主机。'), { code: 'unapproved_project_host' });
   }
   if (!parsed.pathname.endsWith('/')) parsed.pathname += '/';
   return parsed.toString();
 }
 
-function validateRegistration(body, identity) {
+async function validateRegistration(body, identity) {
   if (String(body.agent_identity ?? '') !== identity) throw Object.assign(new Error('请求体身份标记与 Agent 凭据不一致'), { code: 'agent_identity_mismatch', status: 403 });
   const name = String(body.name ?? '').trim();
   if (!name || name.length > 180) throw new Error('服务名称不能为空且不能超过 180 个字符');
-  const projectRoot = validateProjectRoot(body.project_root_url);
+  const projectRoot = await validateProjectRoot(body.project_root_url);
   const requestedClientId = String(body.client_id ?? '').trim();
   if (requestedClientId && !/^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$/.test(requestedClientId)) throw new Error('Client ID 格式不合法');
   const accessMode = body.access_mode ?? 'rules';
@@ -148,7 +148,7 @@ router.get('/capabilities', (req, res) => {
 
 router.post('/services', json, async (req, res, next) => {
   try {
-    const values = validateRegistration(req.body ?? {}, req.agent.identity);
+    const values = await validateRegistration(req.body ?? {}, req.agent.identity);
     const [prior] = await pool.execute(
       `SELECT a.*,r.agent_identity FROM agent_service_registrations r
        JOIN applications a ON a.id=r.application_id

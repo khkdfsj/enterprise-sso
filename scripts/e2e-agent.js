@@ -25,6 +25,26 @@ let payload = await response.json();
 assert.equal(payload.package_name, 'ESSO-DFSJ');
 assert.equal(payload.agent_identity, identity);
 
+const trustedRegistration = {
+  agent_identity: identity,
+  name: 'Agent HTTP Host Test',
+  project_root_url: 'http://10.23.45.67:8087/project/',
+  access_mode: 'rules',
+  provisioning_enabled: false,
+};
+response = await fetch(`${issuer}/api/v1/agent/services`, {
+  method: 'POST', headers: headers('agent-http-denied-0001', { 'content-type': 'application/json' }),
+  body: JSON.stringify({ ...trustedRegistration, project_root_url: 'http://10.23.45.67:8088/project/' }),
+});
+assert.equal(response.status, 400, 'approval must match the exact port');
+response = await fetch(`${issuer}/api/v1/agent/services`, {
+  method: 'POST', headers: headers('agent-http-allowed-0001', { 'content-type': 'application/json' }),
+  body: JSON.stringify(trustedRegistration),
+});
+assert.equal(response.status, 201, 'Agent registration must share the trusted HTTP rule');
+payload = await response.json();
+assert.equal(payload.service.project_root_url, trustedRegistration.project_root_url);
+
 const registerId = 'agent-register-idempotent-0001';
 const registration = {
   agent_identity: identity,

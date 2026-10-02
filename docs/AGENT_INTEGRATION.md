@@ -66,7 +66,7 @@ curl -sS -X POST "$ESSO_ISSUER/api/v1/agent/services" \
 |---|---|
 | `agent_identity` | 与凭据及请求头完全一致的稳定身份标记 |
 | `name` | 后台和登录页向用户显示的服务名称 |
-| `project_root_url` | 浏览器可访问的项目根 URL，不是服务器磁盘路径 |
+| `project_root_url` | 浏览器可访问的项目根 URL，不是服务器磁盘路径；HTTP IP 与端口须先由平台管理员在“可信内网地址”登记 |
 
 可选字段：
 

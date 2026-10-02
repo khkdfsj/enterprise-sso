@@ -75,7 +75,7 @@ export APP_PROVISIONING_ENABLED='0'
 
 只有确实需要由业务系统发起新用户开通时，才将 `APP_PROVISIONING_ENABLED` 设为 `1`。业务系统仍不能接触用户密码，只能取得 15 分钟单次注册链接。
 
-如现有业务系统仍使用内网 HTTP IP 回调，将其主机名/IP逐个加入 `INTERNAL_HTTP_REDIRECT_HOSTS`。这只允许登记精确回调地址，不会更改 114 的 80/443、不会跳转其他网站，也不会发送 HSTS。
+如业务系统使用 HTTP IP 地址，平台管理员先打开“接入服务管理 → 可信内网地址”，按单个 IPv4 地址与端口登记，然后在新增服务向导或 Agent API 中填写对应的项目根地址。登记后立即生效，不必重启 ESSO。停用地址只阻止新的接入登记，既有 OIDC 客户端不会被自动删除。认证中心自身的 HTTP Issuer 仍由 `ALLOW_INSECURE_HTTP_ISSUER` 和 `INTERNAL_HTTP_REDIRECT_HOSTS` 控制；环境变量中的旧接入地址继续生效。
 
 ## 换届
 

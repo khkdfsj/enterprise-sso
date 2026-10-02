@@ -100,6 +100,7 @@
 
 - 服务纵览：`http://210.47.163.114/enterprise-sso/admin/applications`
 - 新增接入向导：`http://210.47.163.114/enterprise-sso/admin/applications/new`
+- 可信内网地址：`http://210.47.163.114/enterprise-sso/admin/trusted-http`
 - 连通与监控：`http://210.47.163.114/enterprise-sso/admin/monitoring`
 - 人员与账号：`http://210.47.163.114/enterprise-sso/admin/people`
 - 新增人员：`http://210.47.163.114/enterprise-sso/admin/people/new`

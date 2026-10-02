@@ -100,6 +100,7 @@ assert.ok(csrf);
 for (const [path, marker] of [
   ['/admin/applications', /服务纵览/],
   ['/admin/applications/new', /登记项目基本信息/],
+  ['/admin/trusted-http', /可信内网地址/],
   ['/admin/monitoring', /服务连通状态/],
   ['/admin/people', /统一人员目录/],
   ['/admin/organization', /部门与职位/],
@@ -113,6 +114,53 @@ for (const [path, marker] of [
   assert.equal(page.status, 200, path);
   assert.match(await page.text(), marker);
 }
+
+const httpServiceBody = new URLSearchParams({
+  csrf, name: 'CI HTTP 接入测试', client_id: 'ci-trusted-http-app',
+  project_root_url: 'http://10.23.45.67:8087/project/', access_mode: 'rules',
+});
+let httpService = await request(`${base}/admin/applications`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: httpServiceBody,
+});
+assert.equal(httpService.status, 400, 'unapproved HTTP origin must be rejected');
+let trustedHost = await request(`${base}/admin/trusted-http`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ csrf, host: '10.23.45.67', port: '8087', note: 'CI 内网业务' }),
+});
+assert.equal(trustedHost.status, 302);
+let trustedList = await request(new URL(trustedHost.headers.get('location'), base));
+assert.match(await trustedList.text(), /http:\/\/10\.23\.45\.67:8087/);
+httpService = await request(`${base}/admin/applications`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: httpServiceBody,
+});
+assert.equal(httpService.status, 200, 'approved HTTP origin must be accepted');
+const httpServiceId = (await httpService.text()).match(/\/admin\/applications\/([^/]+)\/monitor\/start/)?.[1];
+assert.ok(httpServiceId);
+const removedHttpService = await request(`${base}/admin/applications/${httpServiceId}/delete`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ csrf, confirm_name: 'CI HTTP 接入测试' }),
+});
+assert.equal(removedHttpService.status, 302);
+const trustedDatabase = new DatabaseSync(process.env.E2E_DB_FILE);
+const trustedId = trustedDatabase.prepare("SELECT id FROM trusted_http_origins WHERE host='10.23.45.67' AND port=8087").get()?.id;
+const initialHosts = trustedDatabase.prepare("SELECT host FROM trusted_http_origins WHERE port=80 AND status='active' AND id LIKE 'initial-http-%' ORDER BY host").all().map((row) => row.host);
+trustedDatabase.close();
+assert.ok(trustedId);
+assert.deepEqual(initialHosts, ['10.2.0.3', '210.47.163.113', '210.47.163.118', '210.47.163.181']);
+trustedHost = await request(`${base}/admin/trusted-http/${trustedId}/status`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ csrf, status: 'disabled' }),
+});
+assert.equal(trustedHost.status, 302);
+httpService = await request(`${base}/admin/applications`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: httpServiceBody,
+});
+assert.equal(httpService.status, 400, 'disabled HTTP origin must be rejected');
+trustedHost = await request(`${base}/admin/trusted-http/${trustedId}/status`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ csrf, status: 'active' }),
+});
+assert.equal(trustedHost.status, 302);
 
 let generatedSecret = '';
 const probe = http.createServer((_req, res) => {
@@ -187,6 +235,8 @@ try {
   database.prepare("UPDATE system_role_assignments SET status='disabled' WHERE person_id='dev-admin' AND role='super_admin'").run();
   let list = await request(`${base}/admin/applications`);
   assert.equal(list.status, 403);
+  const trustedDenied = await request(`${base}/admin/trusted-http`);
+  assert.equal(trustedDenied.status, 403, 'only platform admins manage trusted HTTP origins');
   const now = new Date();
   const starts = new Date(now.getTime() - 3600_000).toISOString();
   const ends = new Date(now.getTime() + 3600_000).toISOString();

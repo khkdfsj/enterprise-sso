@@ -82,6 +82,8 @@ ESSO 是 Enterprise Single Sign-On 的简称。业务系统不再制作登录页
 
 `http://210.47.163.114/qywx/YourProject/`
 
+其他 HTTP 业务地址需先由平台管理员在“接入服务管理 → 可信内网地址”登记单个 IP 和端口。例如登记 `10.2.0.3:80` 后，可填写 `http://10.2.0.3/YourProject/`。域名、网段和未登记端口不属于该授权；HTTPS 地址仍按原规则接入。
+
 这里填写的是浏览器访问 URL，不是 Linux 或 Windows 磁盘路径。系统会自动生成登录回调、注销返回、健康检查和验收地址，然后生成 `ESSO-DFSJ.zip`。
 
 解压后把整个 `ESSO-DFSJ` 文件夹放进业务项目根目录。目录必须叫 `ESSO-DFSJ`，不得更名。

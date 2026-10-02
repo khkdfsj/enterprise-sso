@@ -7,6 +7,7 @@ import { decryptJson, encryptJson, randomToken, sha256 } from '../security/crypt
 import { hashPassword } from '../security/password.js';
 import { checkApplicationConnectivity } from '../services/application-monitor.js';
 import { buildIntegrationPackage, deriveIntegrationUrls } from '../services/integration-package.js';
+import { isApprovedIntegrationUrl, parseTrustedHttpOrigin } from '../services/trusted-http-origins.js';
 import { ADMIN_CLIENT_ID, adminCallbackUrl, adminClientSecret, adminLoggedOutUrl } from '../services/system-admin-client.js';
 import { addWorkflowMembers, createTurnoverWorkflow, deleteTurnoverWorkflowDraft, publishTurnoverWorkflow, saveRetainedMembers } from '../services/turnover-workflow.js';
 import { publicUrl } from '../public-url.js';
@@ -98,6 +99,7 @@ const navGroups = [
   ['接入服务管理', [
     ['applications', '/admin/applications', '服务纵览', 'serviceView'],
     ['application-new', '/admin/applications/new', '新增接入服务', 'serviceCreate'],
+    ['trusted-http', '/admin/trusted-http', '可信内网地址', 'trustedHttpManage'],
     ['monitoring', '/admin/monitoring', '连通与监控', 'serviceView'],
     ['integration', '/admin/integration', '接入文档', 'serviceView'],
   ]],
@@ -143,12 +145,11 @@ function datetimeLocalBeijing(value) {
 function adminInputError(message, status = 400, code = 'ESSO-INPUT-4001') {
   return Object.assign(new Error(message), { expose: true, status, publicCode: code });
 }
-function validateRedirectUri(value) {
+async function validateRedirectUri(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw adminInputError('地址必须是包含 http:// 或 https:// 的完整 URL。', 400, 'ESSO-APP-4001'); }
   if (parsed.username || parsed.password || parsed.hash) throw adminInputError('地址不能包含账号、密码或锚点。', 400, 'ESSO-APP-4002');
-  const allowedHttp = parsed.protocol === 'http:' && config.internalHttpRedirectHosts.has(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !allowedHttp && !(config.nodeEnv !== 'production' && ['127.0.0.1', 'localhost'].includes(parsed.hostname))) throw adminInputError('地址必须使用 HTTPS；内网 HTTP 地址需先加入允许主机。', 400, 'ESSO-APP-4003');
+  if (!(await isApprovedIntegrationUrl(parsed))) throw adminInputError('地址必须使用 HTTPS；内网 HTTP 地址需先加入可信内网地址。', 400, 'ESSO-APP-4003');
   return parsed.toString();
 }
 async function updateClient(connection, clientId, transform) {
@@ -161,16 +162,16 @@ async function updateClient(connection, clientId, transform) {
 function secretResult(req, title, application, secret, extra = '') {
   return adminPage(req, title, 'applications', `<div class="notice success-notice"><strong>操作成功</strong><p>客户端密钥只显示这一次。请立即写入业务系统的安全配置，不要放入 GitHub。</p></div><section class="card"><div class="detail-list"><div><span>应用</span><strong>${esc(application.name)}</strong></div><div><span>Client ID</span><code>${esc(application.client_id)}</code></div><div><span>Client Secret</span><div class="secret-row"><code class="secret" id="one-time-secret">${esc(secret)}</code><button class="button secondary small" type="button" data-copy="#one-time-secret">复制</button></div></div>${extra}</div><div class="card-actions"><a class="button primary" href="${publicUrl(`/admin/applications/${encodeURIComponent(application.id)}`)}">进入应用配置</a></div></section>`);
 }
-function validateRelatedUrl(value, redirectUri, label, required = true) {
+async function validateRelatedUrl(value, redirectUri, label, required = true) {
   const raw = String(value ?? '').trim();
   if (!raw && !required) return null;
-  const url = validateRedirectUri(raw);
+  const url = await validateRedirectUri(raw);
   const redirect = new URL(redirectUri);
   const parsed = new URL(url);
   if (parsed.host !== redirect.host) throw new Error(`${label}必须与登录回调使用同一主机`);
   return url;
 }
-function projectRootUrl(value) {
+async function projectRootUrl(value) {
   let parsed;
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw adminInputError('项目根地址必须是包含 http:// 或 https:// 的完整 URL。', 400, 'ESSO-APP-4001'); }
   if (parsed.username || parsed.password) throw adminInputError('项目根地址不能包含账号或密码。', 400, 'ESSO-APP-4002');
@@ -253,6 +254,7 @@ async function loadAdminAccess(personId) {
     serviceView: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     serviceCreate: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     serviceManageAll: platformAdmin,
+    trustedHttpManage: platformAdmin,
     agentCredentialView: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     agentCredentialCreate: platformAdmin || permanent || teacher || operationsMember || roles.includes('application_admin'),
     agentCredentialManageAll: platformAdmin || permanent || teacher,
@@ -388,7 +390,7 @@ router.post('/applications', requireAdmin, body, requireCsrf, async (req, res, n
     if (forbidCapability(req, res, 'serviceCreate')) return;
     const name = String(req.body.name ?? '').trim();
     const clientId = String(req.body.client_id ?? '').trim() || `app_${randomToken(12)}`;
-    const homeUrl = projectRootUrl(req.body.project_root_url);
+    const homeUrl = await projectRootUrl(req.body.project_root_url);
     const urls = deriveIntegrationUrls(homeUrl);
     const { redirectUri, logoutUri, healthUri } = urls;
     const accessMode = req.body.access_mode === 'all_active' ? 'all_active' : 'rules';
@@ -527,6 +529,51 @@ router.get('/monitoring', requireAdmin, requireServiceView, async (req, res) => 
   res.send(adminPage(req, '连通与监控', 'monitoring', `<section class="table-panel"><div class="page-actions"><div><h2>服务连通状态</h2><p>接入向导启动后持续检测十分钟，历史结果保留用于排障。</p></div></div><div class="table-wrap"><table><thead><tr><th>服务</th><th>检测地址</th><th>状态</th><th>HTTP</th><th>最近检测</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty-cell">暂无服务</td></tr>'}</tbody></table></div></section>`, '集中查看业务系统可达性'));
 });
 
+router.get('/trusted-http', requireAdmin, async (req, res, next) => {
+  try {
+    if (forbidCapability(req, res, 'trustedHttpManage')) return;
+    const [origins] = await pool.execute(`SELECT t.id,t.host,t.port,t.note,t.status,t.updated_at,p.display_name creator
+      FROM trusted_http_origins t LEFT JOIN people p ON p.id=t.created_by
+      ORDER BY t.status DESC,t.host,t.port`);
+    const configured = [...config.internalHttpRedirectHosts].sort().map((host) => `<tr><td><code>http://${esc(host)}</code></td><td>现有配置</td><td>环境变量</td><td>—</td><td>${badge('生效中', 'success')}</td><td>由服务器配置维护</td></tr>`).join('');
+    const managed = origins.map((item) => `<tr><td><code>http://${esc(item.host)}:${item.port}</code></td><td>${esc(item.note || '—')}</td><td>${esc(item.creator || '管理员')}</td><td>${formatTime(item.updated_at)}</td><td>${item.status === 'active' ? badge('生效中', 'success') : badge('已停用', 'muted')}</td><td><form method="post" action="${publicUrl(`/admin/trusted-http/${encodeURIComponent(item.id)}/status`)}">${csrf(req)}<input type="hidden" name="status" value="${item.status === 'active' ? 'disabled' : 'active'}"><button class="button ghost small">${item.status === 'active' ? '停用' : '重新启用'}</button></form></td></tr>`).join('');
+    const notice = req.query.saved === '1' ? '<div class="notice success-notice"><strong>地址已生效</strong><p>现在可以在新增接入服务中填写对应的 HTTP 项目根地址。</p></div>' : '';
+    res.send(adminPage(req, '可信内网地址', 'trusted-http', `${notice}<section class="table-panel"><div class="page-actions"><div><h2>允许 HTTP 接入的地址</h2><p>按单个 IPv4 地址和端口登记。登记后，后台向导、Agent 和命令行接入立即使用相同规则。</p></div><a class="button primary" href="${publicUrl('/admin/applications/new')}">新增接入服务</a></div><div class="table-wrap"><table><thead><tr><th>地址</th><th>备注</th><th>登记人</th><th>最近更新</th><th>状态</th><th>操作</th></tr></thead><tbody>${configured}${managed || (!configured ? '<tr><td colspan="6" class="empty-cell">尚未登记可信地址</td></tr>' : '')}</tbody></table></div></section><section class="table-panel"><div class="page-actions"><div><h2>添加地址</h2><p>填写业务程序的实际访问 IP 和端口；默认端口为 80。只授权精确 IP 与端口，不接受域名或网段。</p></div></div><form class="form-grid" method="post" action="${publicUrl('/admin/trusted-http')}">${csrf(req)}<label>IPv4 地址<input name="host" inputmode="decimal" placeholder="例如 10.2.0.23" required></label><label>端口<input name="port" type="number" min="1" max="65535" value="80" required></label><label class="span-2">备注<input name="note" maxlength="160" placeholder="例如：部门业务系统所在服务器"></label><div class="form-actions span-2"><button class="button primary">保存并允许 HTTP 接入</button></div></form><p class="form-note">此处只决定哪些地址可以登记为业务系统，不会修改服务器端口或网络连通性；已登记服务的回调地址不会随停用自动删除。</p></section>`, '管理业务系统的 HTTP 接入地址'));
+  } catch (error) { next(error); }
+});
+
+router.post('/trusted-http', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (forbidCapability(req, res, 'trustedHttpManage')) return;
+    let origin;
+    try { origin = parseTrustedHttpOrigin(req.body.host, req.body.port); }
+    catch (error) { throw adminInputError(error.message, 400, 'ESSO-HTTP-4001'); }
+    const note = String(req.body.note ?? '').trim();
+    if (note.length > 160) throw adminInputError('备注不能超过 160 个字符。', 400, 'ESSO-HTTP-4002');
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    await pool.execute(`INSERT INTO trusted_http_origins(id,host,port,note,status,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,'active',?,?,?)
+      ON CONFLICT(host,port) DO UPDATE SET note=excluded.note,status='active',updated_at=excluded.updated_at`,
+    [id, origin.host, origin.port, note, req.admin.person.id, now, now]);
+    await audit(req, 'trusted_http_origin_save', 'success', { actorPersonId: req.admin.person.id, targetType: 'trusted_http_origin', targetId: `${origin.host}:${origin.port}`, detail: { note } });
+    return res.redirect(publicUrl('/admin/trusted-http?saved=1'));
+  } catch (error) { return next(error); }
+});
+
+router.post('/trusted-http/:id/status', requireAdmin, body, requireCsrf, async (req, res, next) => {
+  try {
+    if (forbidCapability(req, res, 'trustedHttpManage')) return;
+    const status = String(req.body.status ?? '');
+    if (!['active', 'disabled'].includes(status)) throw adminInputError('地址状态无效。', 400, 'ESSO-HTTP-4003');
+    const [rows] = await pool.execute('SELECT host,port FROM trusted_http_origins WHERE id=?', [req.params.id]);
+    if (!rows[0]) return res.sendStatus(404);
+    await pool.execute('UPDATE trusted_http_origins SET status=?,updated_at=? WHERE id=?', [status, new Date().toISOString(), req.params.id]);
+    await audit(req, 'trusted_http_origin_status', 'success', { actorPersonId: req.admin.person.id, targetType: 'trusted_http_origin', targetId: `${rows[0].host}:${rows[0].port}`, detail: { status } });
+    return res.redirect(publicUrl('/admin/trusted-http'));
+  } catch (error) { return next(error); }
+});
+
 router.get('/applications/:id/delete', requireAdmin, requireApplicationManager, async (req, res) => {
   const app = req.managedApplication;
   res.send(adminPage(req, '删除接入服务', 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span><span>删除确认</span></div><section class="table-panel danger-zone"><div class="page-actions"><div><h2>永久删除 ${esc(app.name)}</h2><p>将删除客户端、回调、授权规则、连通记录和未使用的快捷注册链接。业务服务器上的 ESSO-DFSJ 文件夹不会被远程删除。</p></div>${badge('不可恢复', 'danger')}</div><form class="form-grid" method="post" action="${publicUrl(`/admin/applications/${encodeURIComponent(app.id)}/delete`)}">${csrf(req)}<label class="span-2">输入服务名称确认<input name="confirm_name" autocomplete="off" placeholder="${esc(app.name)}" required></label><div class="form-actions span-2"><a class="button ghost" href="${publicUrl('/admin/applications')}">取消</a><button class="button danger">确认永久删除</button></div></form></section>`, '只有服务创建者本人或平台管理员可以删除'));
@@ -575,8 +622,8 @@ router.get('/applications/:id', requireAdmin, requireServiceView, async (req, re
   res.send(adminPage(req, app.name, 'applications', `<div class="breadcrumb"><a href="${publicUrl('/admin/applications')}">服务纵览</a><span>/</span>${esc(app.name)}</div><div class="service-header"><div><h2>${esc(app.name)}</h2><code>${esc(app.client_id)}</code></div><div>${statusBadge(app.status)} ${app.access_mode === 'all_active' ? badge('全部有效人员') : badge('按规则授权', 'warning')}</div></div><nav class="subtabs">${tabs}</nav>${tabContent}`, `接入服务管理`));
 });
 
-router.post('/applications/:id/settings', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const name = String(req.body.name ?? '').trim(); if (!name || !['active', 'disabled'].includes(req.body.status) || !['all_active', 'rules'].includes(req.body.access_mode)) return res.sendStatus(400); const [redirects] = await pool.execute('SELECT redirect_uri FROM application_redirect_uris WHERE application_id=? ORDER BY id LIMIT 1', [req.params.id]); if (!redirects[0]) throw new Error('应用没有登录回调地址'); const homeUrl = validateRelatedUrl(req.body.home_url, redirects[0].redirect_uri, '业务系统首页'); const healthUrl = validateRelatedUrl(req.body.health_check_url, redirects[0].redirect_uri, '连通检测地址'); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("UPDATE applications SET name=?,home_url=?,health_check_url=?,status=?,access_mode=?,provisioning_enabled=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [name, homeUrl, healthUrl, req.body.status, req.body.access_mode, req.body.provisioning_enabled === '1' ? 1 : 0, req.params.id]); await updateClient(connection, apps[0].client_id, (payload) => { payload.client_name = name; }); }); await audit(req, 'application_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: req.params.id }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=overview`)); } catch (error) { next(error); } });
-router.post('/applications/:id/redirects', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const uri = validateRedirectUri(req.body.redirect_uri); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, uri]); await updateClient(connection, apps[0].client_id, (payload) => { payload.redirect_uris = [...new Set([...(payload.redirect_uris ?? []), uri])]; }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=endpoints`)); } catch (error) { next(error); } });
+router.post('/applications/:id/settings', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const name = String(req.body.name ?? '').trim(); if (!name || !['active', 'disabled'].includes(req.body.status) || !['all_active', 'rules'].includes(req.body.access_mode)) return res.sendStatus(400); const [redirects] = await pool.execute('SELECT redirect_uri FROM application_redirect_uris WHERE application_id=? ORDER BY id LIMIT 1', [req.params.id]); if (!redirects[0]) throw new Error('应用没有登录回调地址'); const homeUrl = await validateRelatedUrl(req.body.home_url, redirects[0].redirect_uri, '业务系统首页'); const healthUrl = await validateRelatedUrl(req.body.health_check_url, redirects[0].redirect_uri, '连通检测地址'); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("UPDATE applications SET name=?,home_url=?,health_check_url=?,status=?,access_mode=?,provisioning_enabled=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [name, homeUrl, healthUrl, req.body.status, req.body.access_mode, req.body.provisioning_enabled === '1' ? 1 : 0, req.params.id]); await updateClient(connection, apps[0].client_id, (payload) => { payload.client_name = name; }); }); await audit(req, 'application_update', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: req.params.id }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=overview`)); } catch (error) { next(error); } });
+router.post('/applications/:id/redirects', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const uri = await validateRedirectUri(req.body.redirect_uri); await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT client_id FROM applications WHERE id=?', [req.params.id]); if (!apps[0]) throw new Error('应用不存在'); await connection.execute("INSERT INTO application_redirect_uris(application_id,redirect_uri,created_at) VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, uri]); await updateClient(connection, apps[0].client_id, (payload) => { payload.redirect_uris = [...new Set([...(payload.redirect_uris ?? []), uri])]; }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}?tab=endpoints`)); } catch (error) { next(error); } });
 router.post('/applications/:id/redirects/remove', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; await withTransaction(async (connection) => { const [items] = await connection.execute('SELECT r.redirect_uri,a.client_id,(SELECT COUNT(*) FROM application_redirect_uris WHERE application_id=a.id) total FROM application_redirect_uris r JOIN applications a ON a.id=r.application_id WHERE r.id=? AND r.application_id=?', [req.body.redirect_id, req.params.id]); if (!items[0] || items[0].total <= 1) throw new Error('应用必须至少保留一个回调地址'); await connection.execute('DELETE FROM application_redirect_uris WHERE id=?', [req.body.redirect_id]); await updateClient(connection, items[0].client_id, (payload) => { payload.redirect_uris = (payload.redirect_uris ?? []).filter((uri) => uri !== items[0].redirect_uri); }); }); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
 router.post('/applications/:id/rotate-secret', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const secret = randomToken(48); const hash = await hashPassword(secret); let app; await withTransaction(async (connection) => { const [apps] = await connection.execute('SELECT id,name,client_id FROM applications WHERE id=?', [req.params.id]); app = apps[0]; if (!app || app.client_id === ADMIN_CLIENT_ID) throw new Error('应用不存在或不可轮换'); await connection.execute("UPDATE applications SET client_secret_hash=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", [hash, app.id]); await updateClient(connection, app.client_id, (payload) => { payload.client_secret = secret; }); }); await audit(req, 'client_secret_rotate', 'success', { actorPersonId: req.admin.person.id, targetType: 'application', targetId: app.client_id }); res.send(secretResult(req, '密钥轮换成功', app, secret)); } catch (error) { next(error); } });
 router.post('/applications/:id/rules', requireAdmin, body, requireCsrf, async (req, res, next) => { try { if (forbidUnless(req, res, ['super_admin', 'application_admin'])) return; const [choiceType, choiceId] = String(req.body.subject_choice ?? '').split(':', 2); const type = choiceType; const subjectId = type === 'person' ? String(req.body.person_id ?? '').trim() : choiceId; if (!['person', 'department', 'position'].includes(type) || !subjectId || !['allow', 'deny'].includes(req.body.effect)) return res.sendStatus(400); const table = { person: 'people', department: 'departments', position: 'positions' }[type]; const [subject] = await pool.execute(`SELECT id FROM ${table} WHERE id=?`, [subjectId]); if (!subject[0]) throw new Error('授权主体不存在'); const starts = req.body.starts_at ? new Date(req.body.starts_at).toISOString() : null; const ends = req.body.ends_at ? new Date(req.body.ends_at).toISOString() : null; if (starts && ends && starts >= ends) throw new Error('结束时间必须晚于开始时间'); await pool.execute("INSERT INTO application_access_rules(application_id,effect,subject_type,subject_id,starts_at,ends_at,created_at) VALUES (?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", [req.params.id, req.body.effect, type, subjectId, starts, ends]); res.redirect(publicUrl(`/admin/applications/${encodeURIComponent(req.params.id)}`)); } catch (error) { next(error); } });
