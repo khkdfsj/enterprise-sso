@@ -167,11 +167,61 @@ if (process.env.E2E_DB_FILE) {
   }
 }
 
+const logoutUrl = new URL(`${issuer}/session/end`);
+logoutUrl.searchParams.set('client_id', clientId);
+logoutUrl.searchParams.set('post_logout_redirect_uri', redirectUri);
+async function logoutForm() {
+  const page = await request(logoutUrl);
+  const html = await page.text();
+  const action = html.match(/<form id="op\.logoutForm" method="post" action="([^"]+)"/)?.[1];
+  const xsrf = html.match(/name="xsrf" value="([^"]+)"/)?.[1];
+  const recovery = html.match(/name="esso_recovery" value="([^"]+)"/)?.[1];
+  if (page.status !== 200 || !action || !xsrf || !recovery) throw new Error('Logout confirmation is incomplete');
+  return { action: new URL(action, logoutUrl), xsrf, recovery };
+}
+
+let logout = await logoutForm();
+let stale = await fetch(logout.action, {
+  method: 'POST', redirect: 'manual',
+  headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' },
+  body: new URLSearchParams({ xsrf: logout.xsrf, esso_recovery: logout.recovery, logout: 'yes' }),
+});
+if (!stale.headers.get('location')) {
+  const body = await stale.text();
+  throw new Error(`Lost-session logout response: ${stale.status}, detail=${body.slice(0, 240)}`);
+}
+let retry = new URL(nextUrl(logout.action, stale));
+if (stale.status !== 303 || retry.pathname !== new URL(logoutUrl).pathname
+    || retry.searchParams.get('client_id') !== clientId) {
+  throw new Error('Lost logout session did not safely restart confirmation');
+}
+
+logout = await logoutForm();
+stale = await fetch(logout.action, {
+  method: 'POST', redirect: 'manual',
+  headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' },
+  body: new URLSearchParams({ xsrf: logout.xsrf, esso_recovery: logout.recovery }),
+});
+if (stale.status !== 303 || nextUrl(logout.action, stale) !== redirectUri) {
+  throw new Error('Lost logout session did not return to the application on cancel');
+}
+
+logout = await logoutForm();
+response = await request(logout.action, {
+  method: 'POST',
+  headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ xsrf: logout.xsrf, esso_recovery: logout.recovery, logout: 'yes' }),
+});
+if (response.status !== 303 || nextUrl(logout.action, response) !== redirectUri) {
+  throw new Error('Normal logout confirmation did not return to the application');
+}
+
 console.log(JSON.stringify({
   ok: true,
   flow: 'authorization_code_pkce_password',
   sso_reauthentication: 'session_without_password_after_fresh_access_check',
   dynamic_access_revocation: dynamicAccess,
+  logout_recovery: 'lost_session_confirm_and_cancel_recovered',
   subject: user.sub,
   preferred_username: user.preferred_username,
   scope: token.scope,

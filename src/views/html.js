@@ -77,8 +77,11 @@ export function messagePage(title, message, options = {}) {
   return layout({ title, appName: options.appName || '部门统一身份认证', mode: 'status', content: statusContent(title, message, options) });
 }
 
-export function oidcLogoutPage({ appName, form }) {
-  const actions = `${form}<button class="btn primary" autofocus type="submit" form="op.logoutForm" value="yes" name="logout">确认退出</button><button class="btn secondary no-margin" type="submit" form="op.logoutForm">取消</button>`;
+export function oidcLogoutPage({ appName, form, recoveryToken = '' }) {
+  const formWithRecovery = recoveryToken
+    ? form.replace('</form>', `<input type="hidden" name="esso_recovery" value="${escapeHtml(recoveryToken)}"/></form>`)
+    : form;
+  const actions = `${formWithRecovery}<button class="btn primary" autofocus type="submit" form="op.logoutForm" value="yes" name="logout">确认退出</button><button class="btn secondary no-margin" type="submit" form="op.logoutForm">取消</button>`;
   return layout({ title: '确认退出', appName: appName || '部门统一身份认证', mode: 'status', content: statusContent('确认退出？', '退出后，再次使用时需要重新登录。', { tone: 'logout', actions }) });
 }
 
@@ -87,6 +90,12 @@ export function oidcPostLogoutPage(appName) {
 }
 
 export function oidcErrorPage(out = {}, error = {}) {
+  if (['could not find logout details', 'xsrf token invalid'].includes(out.error_description)) {
+    return layout({ title: '退出确认已失效', appName: '部门统一身份认证', mode: 'status', content: statusContent('退出确认已失效', '当前退出页面的会话状态已变化，请从原业务系统重新点击退出。', {
+      tone: 'warning', code: 'ESSO-LOGOUT-4101',
+      solutions: ['返回原业务系统，重新打开退出页面。', '如果同时打开了多个退出页面，请只使用最新打开的一个。'],
+    }) });
+  }
   const title = out.error === 'access_denied' ? '无权访问此应用' : '认证请求未完成';
   const message = out.error_description || '请返回原页面后重试。';
   const code = out.error === 'access_denied' ? 'ESSO-AUTH-4031' : 'ESSO-AUTH-4001';

@@ -1,6 +1,6 @@
 import { config } from './config.js';
 
-const ASSET_VERSION = '0.7.0';
+const ASSET_VERSION = '0.7.1';
 
 export function publicUrl(pathname = '/') {
   const path = pathname.startsWith('/') ? pathname : `/${pathname}`;

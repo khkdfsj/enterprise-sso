@@ -5,6 +5,7 @@ import { SqliteOidcAdapter } from './sqlite-adapter.js';
 import { loadJwks } from './jwks.js';
 import { findAccountClaims } from '../repositories/accounts.js';
 import { oidcErrorPage, oidcLogoutPage, oidcPostLogoutPage } from '../views/html.js';
+import { createLogoutRecovery, readLogoutRecovery } from './logout-recovery.js';
 
 export async function createProvider() {
   const jwks = await loadJwks();
@@ -52,8 +53,12 @@ export async function createProvider() {
         enabled: true,
         async logoutSource(ctx, form) {
           const appName = ctx.oidc.client?.clientName || ctx.oidc.client?.clientId;
+          const recoveryToken = createLogoutRecovery({
+            clientId: ctx.oidc.client?.clientId,
+            returnUri: ctx.oidc.params.post_logout_redirect_uri,
+          }, config.cookieKeys[0]);
           ctx.type = 'html';
-          ctx.body = oidcLogoutPage({ appName, form });
+          ctx.body = oidcLogoutPage({ appName, form, recoveryToken });
         },
         async postLogoutSuccessSource(ctx) {
           const appName = ctx.oidc.client?.clientName || ctx.oidc.client?.clientId;
@@ -63,6 +68,24 @@ export async function createProvider() {
       },
     },
     async renderError(ctx, out, error) {
+      if (['could not find logout details', 'xsrf token invalid'].includes(out.error_description)) {
+        const recovery = readLogoutRecovery(ctx.oidc.body?.esso_recovery, config.cookieKeys[0]);
+        if (recovery) {
+          if (ctx.oidc.body?.logout === 'yes') {
+            const retry = new URL(`${config.issuer}/session/end`);
+            retry.searchParams.set('client_id', recovery.clientId);
+            if (recovery.returnUri) retry.searchParams.set('post_logout_redirect_uri', recovery.returnUri);
+            ctx.status = 303;
+            ctx.redirect(retry.toString());
+            return;
+          }
+          if (recovery.returnUri) {
+            ctx.status = 303;
+            ctx.redirect(recovery.returnUri);
+            return;
+          }
+        }
+      }
       ctx.type = 'html';
       ctx.body = oidcErrorPage(out, error);
     },

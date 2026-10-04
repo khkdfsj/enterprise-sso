@@ -15,7 +15,7 @@ test('hosted login escapes application, username, and CSRF values', () => {
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /interaction%2Fone/);
   assert.match(html, /&lt;b&gt;bad&lt;\/b&gt;/);
-  assert.match(html, /assets\/login\.css\?v=0\.7\.0/);
+  assert.match(html, /assets\/login\.css\?v=0\.7\.1/);
 });
 
 test('QR page keeps browser secret in a POST body, not the status URL', () => {
@@ -46,11 +46,13 @@ test('hosted login hides QR entry until WeCom credentials are complete', () => {
 });
 
 test('OIDC logout, logged-out, and warning pages use the branded modern shell', () => {
-  const logout = oidcLogoutPage({ appName: 'Demo', form: '<form id="op.logoutForm"></form>' });
+  const logout = oidcLogoutPage({ appName: 'Demo', form: '<form id="op.logoutForm"></form>', recoveryToken: 'signed-token' });
   assert.match(logout, /确认退出？/);
   assert.match(logout, /form="op.logoutForm"/);
+  assert.match(logout, /name="esso_recovery" value="signed-token"/);
   assert.match(logout, /auth-visual/);
   assert.match(oidcPostLogoutPage('Demo'), /已退出/);
+  assert.match(oidcErrorPage({ error_description: 'could not find logout details' }), /ESSO-LOGOUT-4101/);
   assert.match(oidcErrorPage({ error: 'access_denied', error_description: 'No <script>x<\/script>' }), /无权访问此应用/);
   assert.doesNotMatch(oidcErrorPage({ error_description: '<script>x<\/script>' }), /<script>x<\/script>/);
 });

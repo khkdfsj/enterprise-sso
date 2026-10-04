@@ -187,13 +187,19 @@ final class EnterpriseSsoClient
         if (session_status() === PHP_SESSION_NONE) {
             if (headers_sent()) throw new RuntimeException('SSO guard must run before any output');
             session_name($this->sessionName);
-            session_set_cookie_params(array(
-                'lifetime' => 0,
-                'path' => $this->sessionPath,
-                'secure' => $this->cookieSecure,
-                'httponly' => true,
-                'samesite' => 'Lax',
-            ));
+            if (PHP_VERSION_ID >= 70300) {
+                session_set_cookie_params(array(
+                    'lifetime' => 0,
+                    'path' => $this->sessionPath,
+                    'secure' => $this->cookieSecure,
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                ));
+            } else {
+                // PHP 7.2 accepts only the five-argument form. The path suffix
+                // keeps SameSite=Lax in the emitted Set-Cookie header.
+                session_set_cookie_params(0, $this->sessionPath . '; SameSite=Lax', '', $this->cookieSecure, true);
+            }
             session_start();
         }
     }

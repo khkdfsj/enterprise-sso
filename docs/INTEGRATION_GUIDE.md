@@ -190,6 +190,11 @@ require_once dirname(__DIR__) . '/ESSO-DFSJ/login.php';
 ### 登录后循环跳转
 
 检查 `ESSO-DFSJ` 是否改名、项目根地址是否填写错误、浏览器是否接受业务 Session Cookie。
+若业务服务器仍使用 PHP 7.2，请使用最新生成的接入包；旧版 `SsoClient.php` 的 Session Cookie 参数格式不兼容该版本。
+
+### 统一认证成功，但业务页面显示账号未启用
+
+先检查 ESSO 是否已返回授权码并完成业务回调。若已完成，后续的 403 由业务系统自己的账号或权限规则产生；在业务系统中核对该 UserID 的开通状态。不要通过重置统一密码或放宽 ESSO 全局权限来处理业务侧禁用。
 
 ### health.php 异常
 
@@ -200,6 +205,8 @@ require_once dirname(__DIR__) . '/ESSO-DFSJ/login.php';
 业务按钮没有调用 `ESSO-DFSJ/logout.php`，只删除了业务自己的 Session，统一会话仍然有效。
 
 标准包会在服务端 Session 中短时保存 `id_token`，注销时作为 `id_token_hint` 发送给 ESSO；这样认证中心能确定需要结束的统一会话，并在完成后回到登记的注销验收或业务地址。该令牌不会返回业务前端或写入日志。
+
+如果退出确认页显示 `ESSO-LOGOUT-4101`，说明原确认页的会话状态已经变化；从业务系统重新打开退出页，不要重复提交浏览器历史记录中的表单。
 
 ### 企业微信提示回调域错误
 
